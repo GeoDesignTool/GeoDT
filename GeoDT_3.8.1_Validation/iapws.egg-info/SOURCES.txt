@@ -1,0 +1,17 @@
+LICENSE
+MANIFEST.in
+README.rst
+setup.py
+iapws/__init__.py
+iapws/_iapws.py
+iapws/_utils.py
+iapws/ammonia.py
+iapws/humidAir.py
+iapws/iapws08.py
+iapws/iapws95.py
+iapws/iapws97.py
+iapws.egg-info/PKG-INFO
+iapws.egg-info/SOURCES.txt
+iapws.egg-info/dependency_links.txt
+iapws.egg-info/requires.txt
+iapws.egg-info/top_level.txt
