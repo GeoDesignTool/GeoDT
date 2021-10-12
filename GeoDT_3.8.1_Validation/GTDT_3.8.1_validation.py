@@ -509,15 +509,6 @@ class pipes:
 #model object, functions, and data as object
 class mesh:
     def __init__(self): #,node=[],pipe=[],fracs=[],wells=[],hydfs=[],bound=[],geo3D=[]): #@@@ are these still used?
-#        #common reference geometry
-#        geo = [None,None,None,None,None] #[natfracs, origin, intlines, points, wells]
-#        geo[0]=sg.mergeObj(geo[0], sg.cylObj(x0=np.asarray([0,0,0]), x1=np.asarray([0.1,0,0]), r=0.1))
-#        geo[1]=sg.mergeObj(geo[1], sg.cylObj(x0=np.asarray([0,0,0]), x1=np.asarray([20,0,0]), r=3.0))
-#        geo[1]=sg.mergeObj(geo[1], sg.cylObj(x0=np.asarray([0,0,0]), x1=np.asarray([0,20,0]), r=3.0))
-#        geo[1]=sg.mergeObj(geo[1], sg.cylObj(x0=np.asarray([0,0,0]), x1=np.asarray([0,0,20]), r=3.0))
-#        geo[2]=sg.mergeObj(geo[2], sg.cylObj(x0=np.asarray([0,0,0]), x1=np.asarray([0.1,0,0]), r=0.1))
-#        geo[3]=sg.mergeObj(geo[3], sg.cylObj(x0=np.asarray([0,0,0]), x1=np.asarray([0.1,0,0]), r=0.1))
-#        geo[4]=sg.mergeObj(geo[3], sg.cylObj(x0=np.asarray([0,0,0]), x1=np.asarray([0.1,0,0]), r=0.1))
         #domain information
         self.rock = reservoir()
         self.nodes = nodes()
@@ -527,16 +518,12 @@ class mesh:
         self.hydfs = []
         self.bound = []
         self.faces = []
-#        self.geo3D = geo #[natfracs, origin, intlines, points, wells]
         #intersections tracker
         self.trakr = [] #index of fractures in chain
         #flow solver
         self.H = [] #boundary pressure head array, m
         self.Q = [] #boundary flow rate array, m3/s
         self.q = [] #calculated pipe flow rates
-#        self.bd = [] #mechanical aperture
-#        self.bh = [] #hydraulic aperture
-#        self.sn = [] #effective stress on fractures
         self.i_p = [] #constant flow well pressures, Pa
         self.i_q = [] #constant flow well rates, m3/s
         self.p_p = [] #constant pressure well pressures, Pa
