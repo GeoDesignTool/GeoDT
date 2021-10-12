@@ -5,7 +5,7 @@
 # Author: Luke P. Frash
 #
 # Notation:
-#  @@@ for code needing to be updated
+#  !!! for code needing to be updated (e.g, limititations or work in progress)
 #  *** for breaks betweeen key sections
 # ****************************************************************************
 
@@ -921,35 +921,6 @@ class mesh:
             if self.faces[i].Mws:
                 quake = np.max([quake,np.max(self.faces[i].Mws)])
         out += [['max_quake',quake]]
-
-#        #flow results
-#        for i in range(0,len(self.i_p)):
-#            out += [['i_p%i' %(i),self.i_p[i]]]
-#            out += [['i_q%i' %(i),self.i_q[i]]]
-#        for i in range(0,len(self.p_p)):
-#            out += [['p_p%i' %(i),self.p_p[i]]]
-#            out += [['p_q%i' %(i),self.p_q[i]]]
-#        for i in range(0,len(self.b_p)):
-#            out += [['b_p%i' %(i),self.b_p[i]]]
-#            out += [['b_q%i' %(i),self.b_q[i]]]
-            
-#        #identify injectors and producers
-#        iPro = np.where(self.w_m<=0.0)[0]
-##        iInj = np.where(self.w_m>0.0)[0]
-#            
-#        #temporal results
-#        for i in iPro:
-#            out += [['w_m%i' %(i),self.w_m[i]]]
-#        for t in range(0,len(self.ts)-1):
-#            for i in iPro:
-#                out += [['p_h%i : %.3f y' %(i,self.ts[t]/yr),self.w_h[i][t]]]
-#        out += [['p_mm',self.p_mm]]
-#        for t in range(0,len(self.ts)-1):
-#            out += [['p_hm : %.3f y' %(self.ts[t]/yr),self.p_hm[t]]]
-#        out += [['tot_b_q',np.sum(self.b_q)]]
-#        out += [['tot_b_m ',np.sum(self.b_m)]]
-#        for t in range(0,len(self.ts)-1):
-#            out += [['b_h : %.3f y' %(self.ts[t]/yr),self.b_h[0][t]]]
         
         #injection pressure
         pinj = np.max(np.asarray(self.p_p))/MPa
@@ -1017,7 +988,8 @@ class mesh:
             out += [['dhout:%.3f' %(self.ts[t]/yr),dhout[t]]]
         
         #output to file
-        out = zip(*out)
+        # out = zip(*out)
+        out = list(map(list,zip(*out)))
         head = out[0][0]
         for i in range(1,len(out[0])):
             head = head + ',' + out[0][i]
@@ -1135,42 +1107,6 @@ class mesh:
         #vtk file
         q_col = [q_0,q_1,q_2,q_3,q_4,q_5,q_6,q_7,q_8,q_9]
         sg.writeVtk(q_obj, q_col, q_lab, vtkFile=(fname + '_fnets.vtk'))
-
-#        #******   paint stimulated fractures   ******
-#        s_obj = [] #fractures
-#        s_col = [] #fractures colors
-#        s_lab = [] #fractures color labels
-#        s_lab = ['Face_Number','Node_Number','Type','bd_mm','bh_mm','Sn_MPa','Pcen_MPa','Pc_MPa','stim','Pmax_MPa']
-#        s_0 = []
-#        s_1 = []
-#        s_2 = []
-#        s_3 = []
-#        s_4 = []
-#        s_5 = []
-#        s_6 = []
-#        s_7 = []
-#        s_8 = []
-#        s_9 = []
-#        #nodex = np.asarray(self.nodes)
-#        for i in range(6,len(self.faces)): #skip boundary node at np.inf
-#            if self.faces[i].ci >= 0:
-#                if self.faces[i].stim > 0:
-#                    #add colors
-#                    s_0 += [i]
-#                    s_1 += [self.faces[i].ci]
-#                    s_2 += [self.faces[i].typ]
-#                    s_3 += [self.faces[i].bd*1000]
-#                    s_4 += [self.faces[i].bh*1000]
-#                    s_5 += [self.faces[i].sn/MPa]
-#                    s_6 += [self.faces[i].Pcen]
-#                    s_7 += [self.faces[i].Pc/MPa]
-#                    s_8 += [self.faces[i].stim]
-#                    s_9 += [self.faces[i].Pmax]
-#                    #add geometry
-#                    s_obj += [HF(r=0.5*self.faces[i].dia, x0=self.faces[i].c0, strikeRad=self.faces[i].str, dipRad=self.faces[i].dip, h=0.01)]
-#        #vtk file
-#        s_col = [s_0,s_1,s_2,s_3,s_4,s_5,s_6,s_7,s_8,s_9]
-#        sg.writeVtk(s_obj, s_col, s_lab, vtkFile=(fname + '_fstim.vtk'))
         
         #******   paint nodes   ******
         n_obj = [] #nodes
@@ -1219,15 +1155,7 @@ class mesh:
                 p_4 += [self.pipes.L[i]]
         #vtk file
         p_col = [p_0,p_1,p_2,p_3,p_4]
-        sg.writeVtk(p_obj, p_col, p_lab, vtkFile=(fname + '_flow.vtk'))               
-        
-#        #pipes and nodes vtk file
-#        objectList=[self.geo3D[1], self.geo3D[2], self.geo3D[3]]
-#        colorList= [0.25,     0.5,    0.75,]
-#        sg.writeVtk(objectList,
-#                    [colorList],
-#                    ['Color'],
-#                    vtkFile=(fname + '_pipes.vtk'))
+        sg.writeVtk(p_obj, p_col, p_lab, vtkFile=(fname + '_flow.vtk'))
 
     def build_pts(self,spacing=25.0,fname='test_gridx'):
         print( '*** constructing temperature grid ***')
@@ -1336,8 +1264,6 @@ class mesh:
         self.faces = self.bound + self.fracs + self.hydfs
         for i in range(0,len(self.faces)):
             self.faces[i].ci = -1
-        #self.fstat = []
-        #self.geo3D = geo3D
         self.trakr = []
         self.H = []
         self.Q = []
@@ -1353,13 +1279,6 @@ class mesh:
 #        self.fp = []
         #self.static_KQn()
         return self
-    
-#    def set_f2n(self):
-#        #build fracture ID to center node ID array
-#        hold = -1*np.ones(len(self.faces),dtype=int)
-#        for i in range(0,len(self.f2n)):
-#            hold[int(self.f2n[i][0])] = self.f2n[i][1]
-#        self.f2n = hold
 
     def set_bcs(self,p_bound=0.0*MPa,q_well=[],p_well=[]):
         #working variables
@@ -1392,80 +1311,6 @@ class mesh:
                     print( 'warning: a well was assigned the far-field pressure boundary condition')
             else:
                 print( 'error: flow boundary point not identified')
-
-#    def set_bcs(self,p_bound=0.0*MPa,q_inlet=[],q_outlet=[],p_inlet=[],p_outlet=[]):
-#        #working variables
-#        rho = self.rock.PoreRho #kg/m3
-#        
-#        #input & output boundaries
-#        self.H = []
-#        self.Q = []
-#        
-#        #outer boundary (always zero index node)
-#        self.H += [[0, p_bound/(rho*g)]]
-#        
-#        #locate boundary conditions
-#        n = [0,0,0,0]
-#        for w in range(0,len(self.wells)):
-#            #*** pressure boundary ***
-#            #injection wells
-#            if (self.wells[w].typ == typ('injector')) and (len(p_inlet)>0):
-#                #coordinates
-#                source = self.wells[w].c0
-#                #find index of duplicate
-#                ck, i = self.nodes.add(source)
-#                if not(ck): #yes duplicate
-#                    if len(p_inlet)>1:
-#                        self.H += [[i, p_inlet[n[0]]/(rho*g)]]
-#                        n[0] += 1
-#                    else:
-#                        self.H += [[i, p_inlet[0]/(rho*g)]]
-#                else:
-#                    print( 'error: flow boundary point not identified')
-#            #production wells
-#            if (self.wells[w].typ == typ('producer')) and (len(p_outlet)>0):
-#                #coordinates
-#                source = self.wells[w].c0
-#                #find index of duplicate
-#                ck, i = self.nodes.add(source)
-#                if not(ck): #yes duplicate
-#                    if len(p_outlet)>1:
-#                        self.H += [[i, p_outlet[n[1]]/(rho*g)]]
-#                        n[1] += 1
-#                    else:
-#                        self.H += [[i, p_outlet[0]/(rho*g)]]
-#                else:
-#                    print( 'error: pressure boundary point not identified')
-#                
-#            #*** flow boundary ***
-#            #injection well
-#            if (self.wells[w].typ == typ('injector')) and (len(q_inlet)>0):
-#                #coordinates
-#                source = self.wells[w].c0
-#                #find index of duplicate
-#                ck, i = self.nodes.add(source)
-#                if not(ck): #yes duplicate
-#                    if len(q_inlet)>1:
-#                        self.Q += [[i, -q_inlet[n[2]]]]
-#                        n[2] += 1
-#                    else:
-#                        self.Q += [[i, -q_inlet[0]]]
-#                else:
-#                    print( 'error: flow boundary point not identified')
-#            #production wells
-#            if (self.wells[w].typ == typ('producer')) and (len(q_outlet)>0):
-#                #coordinates
-#                source = self.wells[w].c0
-#                #find index of duplicate
-#                ck, i = self.nodes.add(source)
-#                if not(ck): #yes duplicate
-#                    if len(q_outlet)>1:
-#                        self.Q += [[i, q_outlet[n[3]]]]
-#                        n[3] += 1
-#                    else:
-#                        self.Q += [[i, q_outlet[0]]]
-#                else:
-#                    print( 'error: pressure boundary point not identified')
 
     def therm_bcs(self,T_bound=0.0,T_inlet=[]):
 #        #search array
@@ -1563,9 +1408,6 @@ class mesh:
                     i_frac += [targetID]
 #                    fs_i += [targetID]
                     self.trakr += [[-1,targetID]]
-#        #draw well geometry
-#        if plot: #plot 3D
-#            self.geo3D[4]=sg.mergeObj(self.geo3D[4], sg.cylObj(x0=c0, x1=c1, r=2.0))
         #in case of no intersections
         #add_flowpath(self, source, target, length, width, featTyp, featID, tol = 0.001):
         if len(x_well) == 0:
@@ -1578,8 +1420,6 @@ class mesh:
                              sourceID)
             #return False
             return False
-#            if plot: #plot 3D
-#                self.geo3D[2]=sg.mergeObj(self.geo3D[2], sg.cylObj(x0=c0, x1=c1, r=3.0))
         #in case of intersections
         else:
             #convert to array #@@@@@@ this is new
@@ -1596,8 +1436,6 @@ class mesh:
                              dia,
                              lty,
                              sourceID)
-#            if plot: #plot 3D
-#                self.geo3D[2]=sg.mergeObj(self.geo3D[2], sg.cylObj(x0=c0, x1=x_well[a[0]], r=3.0))
             #intersection points
             i = 0
             for i in range(0,len(rs)-1):
@@ -1625,11 +1463,6 @@ class mesh:
                 #store fracture centerpoint node number
                 if p_2 >= 0:
                     self.faces[i_frac[a[i]]].ci = p_2
-#                    self.f2n += [[targetID,p_2]]
-#                if plot: #plot 3D
-#                    self.geo3D[2]=sg.mergeObj(self.geo3D[2], sg.cylObj(x0=x_well[a[i]], x1=x_well[a[i+1]], r=3.0))
-#                    self.geo3D[2]=sg.mergeObj(self.geo3D[2], sg.cylObj(x0=x_well[a[i]], x1=o_frac[a[i]], r=3.0))
-#                    self.geo3D[3]=sg.mergeObj(self.geo3D[3], sg.cylObj(x0=x_well[a[i]], x1=x_well[a[i]]+np.asarray([0.0,0.0,0.5]), r=3.0))
             #last segment well-choke link
             self.add_flowpath(x_well[a[-1]] + offset,
                              x_well[a[-1]] + offset*0.5,
@@ -1654,11 +1487,6 @@ class mesh:
             #store fracture centerpoint node number
             if p_2 >= 0:
                 self.faces[i_frac[a[-1]]].ci = p_2
-#                self.f2n += [[targetID,p_2]]
-#            #last well dead end segment can be ignored
-#            if plot: #plot 3D
-#                self.geo3D[2]=sg.mergeObj(self.geo3D[2], sg.cylObj(x0=x_well[a[-1]], x1=o_frac[a[-1]], r=3.0))
-#                self.geo3D[3]=sg.mergeObj(self.geo3D[3], sg.cylObj(x0=x_well[a[-1]], x1=x_well[a[-1]]+np.asarray([0.0,0.0,0.5]), r=3.0))
             return True
     
     #intersections of a plane with a plane
@@ -1670,11 +1498,6 @@ class mesh:
         vNor1 = np.asarray([math.sin(azn+90.0*deg)*math.sin(dip),math.cos(azn+90.0*deg)*math.sin(dip),math.cos(dip)])
         c01 = self.faces[sourceID].c0
         f1_t = self.faces[sourceID].typ
-#        f1_a = self.faces[sourceID,7]
-#        f1_r = self.faces[sourceID,8]
-#        if plot: #plot 3D fracture
-#            fracture = HF(r=0.5*dia1,x0=c01,strikeRad=azn,dipRad=dip,h=0.01)
-#            self.geo3D[0]=sg.mergeObj(self.geo3D[0], fracture)
         
         #plane 2
         dia2 = 0.5*self.faces[targetID].dia
@@ -1683,11 +1506,6 @@ class mesh:
         vNor2 = np.asarray([math.sin(azn+90.0*deg)*math.sin(dip),math.cos(azn+90.0*deg)*math.sin(dip),math.cos(dip)])
         c02 = self.faces[targetID].c0
         f2_t = self.faces[targetID].typ
-#        f2_a = self.faces[targetID,7]
-#        f2_r = self.faces[targetID,8]
-#        if plot: #plot 3D fracture
-#            fracture = HF(r=0.5*dia2,x0=c02,strikeRad=azn,dipRad=dip,h=0.01)
-#            self.geo3D[0]=sg.mergeObj(self.geo3D[0], fracture)
         
         #intersection vector
         vInt = []
@@ -1742,12 +1560,6 @@ class mesh:
                     xInt = np.delete(xInt,(slot-i),axis=0)
             if len(xInt) == 2 and np.sum(np.isnan(xInt)) == 0:
                 xMid = 0.5*(xInt[0]+xInt[1])
-#                self.geo3D[3]=sg.mergeObj(self.geo3D[3], sg.cylObj(x0=(xMid+np.asarray([0.0,0.0,-5.0])), x1=(xMid+np.asarray([0.0,0.0,5.0])), r=5.0))
-    #            if plot: #plot 3D intersection line
-    #                for i in xInt:
-    #                    self.geo3D[3]=sg.mergeObj(self.geo3D[3], sg.cylObj(x0=(i+np.asarray([0.0,0.0,-5.0])), x1=(i+np.asarray([0.0,0.0,5.0])), r=5.0))
-    #                if (np.sum(np.isnan(xInt)) == 0) and len(xInt) >= 2:
-    #                    self.geo3D[2]=sg.mergeObj(self.geo3D[2], sg.cylObj(x0=xInt[0], x1=xInt[1], r=5.0))
             #add pipes to network            
             if (np.sum(np.isnan(xInt)) == 0) and len(xInt) == 2:
                 #normal fracture-fracture connection
@@ -1770,13 +1582,6 @@ class mesh:
                     #store fracture centerpoint node number
                     if p_2 >= 0:
                         self.faces[targetID].ci = p_2
-#                        self.f2n += [[targetID,p_2]]
-#                    #plot flow lines
-#                    if plot:
-#                        self.geo3D[3]=sg.mergeObj(self.geo3D[3], sg.cylObj(x0=(xMid+np.asarray([0.0,0.0,-3.0])), x1=(xMid+np.asarray([0.0,0.0,3.0])), r=3.0))
-#                        self.geo3D[3]=sg.mergeObj(self.geo3D[3], sg.cylObj(x0=(c02+np.asarray([0.0,0.0,-3.0])), x1=(c02+np.asarray([0.0,0.0,3.0])), r=3.0))
-#                        self.geo3D[2]=sg.mergeObj(self.geo3D[2], sg.cylObj(x0=c01, x1=xMid, r=3.0))
-#                        self.geo3D[2]=sg.mergeObj(self.geo3D[2], sg.cylObj(x0=xMid, x1=c02, r=3.0))
                     #update tracker
                     self.trakr += [[sourceID,targetID]] 
                 #fracture-boundary connection (boundary type = -3)
@@ -1798,28 +1603,6 @@ class mesh:
                     #store fracture centerpoint node number
                     if p_2 >= 0:
                         self.faces[targetID].ci = p_2
-#                        self.f2n += [[targetID,p_2]]
-#                    print( 'boundary intersection added')
-#                    #plot flow lines
-#                    if plot:
-#                        self.geo3D[3]=sg.mergeObj(self.geo3D[3], sg.cylObj(x0=(xMid+np.asarray([0.0,0.0,-3.0])), x1=(xMid+np.asarray([0.0,0.0,3.0])), r=3.0))
-#                        self.geo3D[3]=sg.mergeObj(self.geo3D[3], sg.cylObj(x0=(c02+np.asarray([0.0,0.0,-3.0])), x1=(c02+np.asarray([0.0,0.0,3.0])), r=3.0))
-#                        self.geo3D[2]=sg.mergeObj(self.geo3D[2], sg.cylObj(x0=c01, x1=xMid, r=3.0))
-#                        self.geo3D[2]=sg.mergeObj(self.geo3D[2], sg.cylObj(x0=xMid, x1=c02, r=3.0))
-#                    #update tracker
-#                    self.trakr += [[sourceID,targetID]]      
-#        return self
-    
-#    #fracture pressure tracker
-#    def update_face_pressure(self):
-#        #initialize array if not yet created
-#        if len(self.fp) == 0:
-#            self.fp = np.zeros(len(self.faces))
-#        #update fracture center point pressure
-#        for f in range(0,len(self.faces)):
-#            #set pressure
-#            if self.f2n[f] >= 0:
-#                self.fp[f] = self.p[int(self.f2n[f])] #Pa
                 
     # ********************************************************************
     # domain creation
@@ -1840,22 +1623,6 @@ class mesh:
         domb3D += [surf(0.0,0.0,size,4.0*size,00.0*deg,00.0*deg,'boundary',self.rock)]
         #add to model domain
         self.bound = domb3D        
-        #plot 3D wireframe boundary
-#        if plot: 
-#            bp = np.asarray([[-size,-size,-size], [-size,-size,size], [-size,size,size], [size,size,size],
-#                             [size,-size,size], [size,-size,-size], [size,size,-size], [-size,size,-size]])
-#            self.geo3D[1]=sg.mergeObj(self.geo3D[1], sg.cylObj(x0=bp[0],x1=bp[1], r=2.0))
-#            self.geo3D[1]=sg.mergeObj(self.geo3D[1], sg.cylObj(x0=bp[1],x1=bp[2], r=2.0))
-#            self.geo3D[1]=sg.mergeObj(self.geo3D[1], sg.cylObj(x0=bp[2],x1=bp[3], r=2.0))
-#            self.geo3D[1]=sg.mergeObj(self.geo3D[1], sg.cylObj(x0=bp[3],x1=bp[4], r=2.0))
-#            self.geo3D[1]=sg.mergeObj(self.geo3D[1], sg.cylObj(x0=bp[4],x1=bp[5], r=2.0))
-#            self.geo3D[1]=sg.mergeObj(self.geo3D[1], sg.cylObj(x0=bp[5],x1=bp[6], r=2.0))
-#            self.geo3D[1]=sg.mergeObj(self.geo3D[1], sg.cylObj(x0=bp[6],x1=bp[7], r=2.0))
-#            self.geo3D[1]=sg.mergeObj(self.geo3D[1], sg.cylObj(x0=bp[7],x1=bp[0], r=2.0))
-#            self.geo3D[1]=sg.mergeObj(self.geo3D[1], sg.cylObj(x0=bp[0],x1=bp[5], r=2.0))
-#            self.geo3D[1]=sg.mergeObj(self.geo3D[1], sg.cylObj(x0=bp[1],x1=bp[4], r=2.0))
-#            self.geo3D[1]=sg.mergeObj(self.geo3D[1], sg.cylObj(x0=bp[3],x1=bp[6], r=2.0))
-#            self.geo3D[1]=sg.mergeObj(self.geo3D[1], sg.cylObj(x0=bp[2],x1=bp[7], r=2.0))
 
     # ********************************************************************
     # fracture network creation
@@ -1896,7 +1663,6 @@ class mesh:
         #size of domain for reservoir
         size = self.rock.size 
         #working variables
-#        frac = []
         frac3D = []
         #populate fractures
         for n in range(0,f_num):
@@ -1912,23 +1678,6 @@ class mesh:
             #compile list of fractures
             frac3D += [surf(c0[0],c0[1],c0[2],dia,azn,dip,'fracture',self.rock)]
             
-            #stuff for 2D imaging
-            #vDip = np.asarray([math.sin(azn+90.0*deg)*math.cos(-dip),math.cos(azn+90.0*deg)*math.cos(-dip),math.sin(-dip)])
-            #vAzn = np.asarray([math.sin(azn),math.cos(azn),0.0])
-#            c1 = c0 + 0.5*dia*vAzn
-#            c2 = c0 - 0.5*dia*vAzn
-#            frac += [[c2,c1]]
-            #Store fracture parameters; type = 1 for natural fracture; roughness (N) = 1.0 for smooth
-            #[x0,yo,zo,leg,Azn,Dip,Type,Aperture,Roughness]
-            
-#            #plot 3D fracture
-#            if plot: 
-#                fracture = HF(r=0.5*dia,x0=c0,strikeRad=azn,dipRad=dip,h=0.01)
-#                self.geo3D[0]=sg.mergeObj(self.geo3D[0], fracture)
-        # Convert to arrays for slicing
-#        frac = np.asarray(frac) #[[n],[a/b],[x/y/z]]
-#        frac3D = np.asarray(frac3D) #[x0,y0,z0,dia,azn,dip]
-        
         #add to model domain
         self.fracs += frac3D
     
@@ -2251,7 +2000,6 @@ class mesh:
             self.gen_pipes()
         
         #set boundary conditions (m3/s) (Pa); 10 kg/s ~ 0.01 m3/s for water
-#        self.set_bcs(p_bound=p_bound,q_inlet=q_inlet,q_outlet=q_outlet,p_inlet=p_inlet,p_outlet=p_outlet)
         self.set_bcs(p_bound=p_bound,q_well=q_well,p_well=p_well)
         
         #get fluid properties
@@ -2878,12 +2626,6 @@ class mesh:
         for i in range(0,len(w_m)):
             dht += -w_m[i]*w_h[i]
         self.dhout = dht
-    
-        ##print key results
-        #print '\nNode Temperature (R)'
-        #print Tn
-        #print '\nNode Enthalpy (kJ/kg)'
-        #print hn
 
         if plot: #plots
             fig = pylab.figure(figsize=(11.0, 8.5), dpi=96, facecolor='w', edgecolor='k',tight_layout=True) # Medium resolution
@@ -3039,32 +2781,16 @@ class mesh:
             #set production boundary conditions
             for i in range(0,p_div):
                 p_well[p_key[i]] = pwp
-                
-#            #error tracking
-#            print '@@@ hydrofrac & completed & q_well & p_well'
-#            print hydrofrac
-#            print completed
-#            print q_well
-#            print p_well
 
             #solve flow with pressure drive
             self.get_flow(p_bound=bhp,p_well=p_well,q_well=q_well)
             
-            #fetch pressure and flow rates #@@@@ this may need updating
+            #fetch pressure and flow rates #!!! this may need updating
             Pis += [tip]
             Qi = []
             for i in range(0,i_div):
                 Qi += [self.p_q[i_key[i]]]
             Qis += [Qi]
-            #Qis += [np.max(self.p_q)]
-            
-#            print '@@@ p_p and p_q'
-#            print self.p_p
-#            print self.p_q
-#            
-#            print '@@@ tip & Qi'
-#            print tip
-#            print Qi
             
             #create vtk
             if visuals:
@@ -3193,13 +2919,6 @@ class mesh:
         for i in range(0,p_div):
             p_well[p_key[i]] = pwp
             
-#        #error tracking
-#        print '@@@ hydrofrac & completed & q_well & p_well'
-#        print hydrofrac
-#        print completed
-#        print q_well
-#        print p_well
-            
         #solve flow
         self.get_flow(p_bound=bhp,p_well=p_well,q_well=q_well,reinit=False)
         #get max pressure on each fracture from all the nodes associated with that fracture
@@ -3215,10 +2934,6 @@ class mesh:
             #compute fracture properties
             self.GR_bh(i,fix=True)
         
-#        print '@@@ p_p and p_q'
-#        print self.p_p
-#        print self.p_q
-        
         #***** flow rate solve for heat transfer solution
         q_well = np.full(len(self.wells),None)
         p_well = np.full(len(self.wells),None)
@@ -3231,22 +2946,9 @@ class mesh:
         #set production boundary conditions
         for i in range(0,p_div):
             p_well[p_key[i]] = pwp
-            
-            
-#        #error tracking
-#        print '@@@ stabilize & hydrofrac & completed & q_well & p_well'
-#        print stabilize
-#        print hydrofrac
-#        print completed
-#        print q_well
-#        print p_well
         
         #solve flow
         self.get_flow(p_bound=bhp,p_well=p_well,q_well=q_well,reinit=False,useprior=True)
-        
-#        print '@@@ p_p and p_q'
-#        print self.p_p
-#        print self.p_q
         
         #***** solver overrides for key inputs and outputs
         Pi = []
@@ -3264,10 +2966,6 @@ class mesh:
         Pis += [Pi]
         Qis += [Qi]
         
-#        print '@@@ Pi & Qi'
-#        print Pi
-#        print Qi
-        
         #final visualization
         Qis = np.asarray(Qis)
         Pis = np.asarray(Pis)
@@ -3275,14 +2973,6 @@ class mesh:
             #create vtk with final flow data
             fname2 = fname + '_B'
             self.build_vtk(fname2)
-#            #create plot of Q and P
-#            fig = pylab.figure(figsize=(8.0, 6.0), dpi=96, facecolor='w', edgecolor='k',tight_layout=True) # Medium resolution
-#            ax1 = fig.add_subplot(111)
-#            for i in range(0,i_div):
-#                ax1.plot(Qis[:,i],Pis[:,i]/MPa,linewidth=0.5,label='%i' %(i))
-#            ax1.set_xlabel('Injection Rate (m3/s)')
-#            ax1.set_ylabel('Injection Pressure (MPa)')
-#            #ax1.legend(loc='upper right', prop={'size':8}, ncol=1, numpoints=1)
             self.v_Rs = Rs
             self.v_ts = ts
             self.v_Ps = Ps
@@ -3457,7 +3147,7 @@ class mesh:
         
         ax2.set_xlabel('Radial Distance (m)')
         ax2.set_ylabel('Aperture (m)')
-        
+
         ax3.set_xlabel('Radius (m)')
         ax3.set_ylabel('Volume (m3)')
         
@@ -3466,19 +3156,6 @@ class mesh:
         
         ax5.set_xlabel('Radius (m)')
         ax5.set_ylabel('Avg. Aperture (m)')
-        
-#        print 'det_Vs'
-#        print Vt
-#        print 'det_Rs'
-#        print rst[:,-1]
-#        print 'det_ws'
-#        print Vt/(pi*rst[:,-1]**2.0)
-#        print 'det_ts'
-#        print time
-#        print 'det_Pnet'
-#        print Pt
-#        print 'det_Pinj'
-#        print np.asarray(pst)[:,0]
 
 
 # ****************************************************************************
