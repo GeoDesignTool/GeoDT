@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+print('GeoDT_3.8.1')
 
 # ****************************************************************************
 # Calculate economic potential of EGS & optimize borehole layout with caging
@@ -21,8 +22,8 @@ from iapws import IAPWS97 as therm
 import SimpleGeometry as sg
 from scipy import stats
 #import sys
-import matplotlib.pyplot as plt
-import copy
+# import matplotlib.pyplot as plt
+# import copy
 
 # ****************************************************************************
 #### unit conversions
@@ -99,6 +100,97 @@ def azn_dip(x0,x1):
     else:
         dip = np.arctan(dz/dr)
     return azn, dip
+
+def exponential_trunc(nsam,bval=1.0,Mmax=5.0,Mwin=1.0,prob=0.1): # random samples from a truncated exponential distribution
+    # zero-centered Mcap
+    lamba = np.log(10)*bval
+    Mcap = (-1.0/lamba)*np.log(prob/(np.exp(lamba*Mwin)-1.0+prob))
+    # calculated Mmin
+    Mmin = Mmax-Mcap
+    # sample sets with resamples out-of-range values
+    s0 = np.random.exponential(1.0/(np.log(10)*bval), nsam) + Mmin
+    iters = 0
+    while 1:
+        iters += 1
+        r_pl = s0 > Mmax
+        if np.sum(r_pl) > 0:
+            r_dr = np.random.exponential(1.0/(np.log(10)*bval), nsam) + Mmin
+            s0 = s0*(1-r_pl) + r_dr*(r_pl)
+        else:
+            break
+        if iters > 100:
+            break
+    return s0
+
+def contact_trunc(nsam,weight=0.15,
+                  bd_nom=0.002,stddev=0.5*0.002,
+                  exp_B=0.5,exp_C=0.5/np.pi,
+                  bd_min=0.0001,bd_max=3.0*0.002): # get random samples from a 'contact' distribution
+    # binomial samples
+    n1 = np.random.binomial(nsam,weight,(1))
+    n2 = nsam - n1
+    # exponential samples
+    s1 = np.random.exponential(exp_B, n1)*exp_C*bd_nom + bd_min
+    iters = 0
+    while 1:
+        iters += 1
+        r_pl = s1 > bd_max
+        if np.sum(r_pl) > 0:
+            r_dr = np.random.exponential(exp_B, n1)*exp_C*bd_nom + bd_min
+            s1 = s1*(1-r_pl) + r_dr*(r_pl)
+        else:
+            break
+        if iters > 100:
+            break
+    # normal samples
+    s2 = np.random.normal(bd_nom,stddev,n2)
+    iters = 0
+    while 1:
+        iters += 1
+        r_pl = (s2 > bd_max) + (s2 < bd_min)
+        if np.sum(r_pl) > 0:
+            r_dr = np.random.normal(bd_nom,stddev,n2)
+            s2 = s2*(1-r_pl) + r_dr*(r_pl)
+        else:
+            break
+        if iters > 100:
+            break
+    s0 = np.concatenate((s1,s2),axis=0)
+    return s0
+
+def lognorm_trunc(nsam,logmu=0.0,logdev=1.0,
+                  loglo=-2.0,loghi=2.0): # get random samples from a log normal distribution
+    # normal samples
+    s0 = np.random.normal(logmu,logdev,nsam)
+    iters = 0
+    while 1:
+        iters += 1
+        r_pl = (s0 > loghi) + (s0 < loglo)
+        if np.sum(r_pl) > 0:
+            r_dr = np.random.normal(logmu,logdev,nsam)
+            s0 = s0*(1-r_pl) + r_dr*(r_pl)
+        else:
+            break
+        if iters > 100:
+            break
+    return 10.0**s0
+
+def norm_trunc(nsam,mu=0.0,dev=1.0,
+                  lo=-2.0,hi=2.0): # get random samples from a log normal distribution
+    # normal samples
+    s0 = np.random.normal(mu,dev,nsam)
+    iters = 0
+    while 1:
+        iters += 1
+        r_pl = (s0 > hi) + (s0 < lo)
+        if np.sum(r_pl) > 0:
+            r_dr = np.random.normal(mu,dev,nsam)
+            s0 = s0*(1-r_pl) + r_dr*(r_pl)
+        else:
+            break
+        if iters > 100:
+            break
+    return s0
 
 class cauchy: #functions modified from JPM
     def __init__(self):
@@ -254,12 +346,12 @@ class reservoir:
                                 [90.0*deg,8.0*deg],
                                 [0.0*deg,8.0*deg]],dtype=float) #m
         #fracture hydraulic parameters
-        self.alpha = np.asarray([-0.002/MPa,-0.028/MPa,-0.080/MPa])
-        self.gamma = np.asarray([0.005,0.01,0.05])
+        self.gamma = np.asarray([10.0**-3.0,10.0**-2.0,10.0**-1.2])
         self.n1 = np.asarray([1.0,1.0,1.0])
-        self.a = np.asarray([0.031,0.05,0.125])
-        self.b = np.asarray([0.75,0.8,0.85])
-        self.N = np.asarray([0.2,0.5,1.2])
+        self.a = np.asarray([0.000,0.200,0.800])
+        self.b = np.asarray([0.999,1.0,1.001])
+        self.N = np.asarray([0.0,0.6,2.0])
+        self.alpha = np.asarray([2.0e-9,2.9e-8,10.0e-8])
         self.bh = np.asarray([0.00005,0.0001,0.0002]) #np.asarray([0.00005,0.00010,0.00020])
         self.bh_min = 0.00005 #m
         self.bh_max = 0.02 #0.02000 #m
@@ -379,45 +471,20 @@ class surf:
         #hydraulic geometry
         self.bh = -1.0
         
-        #*** calculated paramters ***
-        #exponential for N, alpha, gamma, and a
-        r = np.random.exponential(scale=0.25,size=1)
-        r[r>1.0] = 1.0
-        r[r<0] = 0.0
-        self.u_N = r[0]*(rock.N[2]-rock.N[0])+rock.N[0]        
-        r = np.random.exponential(scale=0.25,size=1)
-        r[r>1.0] = 1.0
-        r[r<0] = 0.0
-        self.u_alpha = r[0]*(rock.alpha[2]-rock.alpha[0])+rock.alpha[0]        
-        r = np.random.exponential(scale=0.25,size=1)
-        r[r>1.0] = 1.0
-        r[r<0] = 0.0
-        self.u_a = r[0]*(rock.a[2]-rock.a[0])+rock.a[0]        
-        r = np.random.exponential(scale=0.25,size=1)
-        r[r>1.0] = 1.0
-        r[r<0] = 0.0
-        self.u_gamma = r[0]*(rock.gamma[2]-rock.gamma[0])+rock.gamma[0]    
-        #uniform for b
-        r = np.random.uniform(rock.b[0],rock.b[2],size=1)
-        self.u_b = r[0]
-        #uniform for n1
-        r = np.random.uniform(rock.n1[0],rock.n1[2],size=1)
-        self.u_n1 = r[0]
-        #exponential for bh
-        r = np.random.exponential(scale=0.25,size=1)
-        r[r>1.0] = 1.0
-        r[r<0] = 0.0
-        self.bh = r[0]*(rock.bh[2]-rock.bh[0])+rock.bh[0]
-        #uniform for phi
+        #*** stochastic sampled parameters *** #!!!
+        self.u_gamma = lognorm_trunc(1,np.log10(rock.gamma[1]),0.45,np.log10(rock.gamma[0]),np.log10(rock.gamma[2]))[0]
+        self.u_n1 = np.random.uniform(rock.n1[0],rock.n1[2],(1))[0]
+        self.u_a = norm_trunc(1,rock.a[1],0.150,rock.a[0],rock.a[2])[0]
+        self.u_b = np.random.uniform(rock.b[0],rock.b[2],(1))[0]
+        self.u_N = contact_trunc(1,0.15,rock.N[1],0.5*rock.N[1],0.5,0.5*rock.N[1]/np.pi,rock.N[0],rock.N[2])[0]
+        self.u_alpha = norm_trunc(1,rock.alpha[1],rock.alpha[1],rock.alpha[0],rock.alpha[2])[0]
+        self.bh = norm_trunc(1,rock.bh[1],rock.bh[1],rock.bh[0],rock.bh[2])[0] #!!! would be nice to replace this with a physics based estimate
         if phi < 0:
-            r = np.random.uniform(rock.phi[0],rock.phi[2],size=1)
-            self.phi = r[0]
+            self.phi = np.random.uniform(rock.phi[0],rock.phi[2],(1))[0]
         else:
             self.phi = phi
-        #uniform for mcc
         if mcc < 0:
-            r = np.random.uniform(rock.mcc[0],rock.mcc[2],size=1)
-            self.mcc = r[0]
+            self.mcc = np.random.uniform(rock.mcc[0],rock.mcc[2],(1))[0]
         else:
             self.mcc = mcc
         #stress state
@@ -600,7 +667,7 @@ class mesh:
 #            #stress states
 #            self.faces[n].Pc, self.faces[n].sn, self.faces[n].tau = self.rock.stress.Pc_frac(self.faces[n].str, self.faces[n].dip, self.faces[n].phi, self.faces[n].mcc)
             
-    # L - d - M - k Gutenberg-Richter based aperture stimulation #@@@ can add ability to grow fractures here
+    # L - d - M - k Gutenberg-Richter based aperture stimulation
     def GR_bh(self, f_id, fix=False): #, pp=-666.0):
         #initialize stim
         stim = False
@@ -622,7 +689,7 @@ class mesh:
         if stim == False:
             #compute stress dependent apertures
             bd0 = self.faces[f_id].bd0
-            bd = bd0*np.exp(self.faces[f_id].u_alpha*e_cen)
+            bd = bd0*np.exp(-self.faces[f_id].u_alpha*e_cen)
             bh = bd*self.faces[f_id].u_N
             #note that fracture is closed
             self.faces[f_id].hydroprop = False
@@ -643,7 +710,7 @@ class mesh:
             #if closed
             else:
                 #stress closure
-                bd = bd0 * np.exp(self.faces[f_id].u_alpha*e_max)
+                bd = bd0 * np.exp(-self.faces[f_id].u_alpha*e_max)
                 #hydraulic aperture
                 bh = bd * self.faces[f_id].u_N
                 #note that fracture is closed
@@ -651,59 +718,26 @@ class mesh:
         #if stimulated
         else:
             #*** shear component ***
-            #G-R b-value for earthquake distribution
-            bval = self.rock.bval
-            
-#            #maximum moment (potential slip method)
-#            dnom = self.rock.gamma[1] * (2.0*f_radius) ** self.rock.n1[1]
-#            dmax = self.rock.gamma[2] * (2.0*f_radius) ** self.rock.n1[2]
-#            ddnomM = dmax-dnom
-#            M0max = (pi*f_radius**2.0) * (0.5*ddnomM) * self.rock.ResG # circular displacement field, using max and nominal value
-#            Mwmax = (np.log10(M0max)-9.1)/1.5
-#            #minimum moment (matrix permeability method)
-#            dbdnom = (12.0*self.rock.Porek/s_N**3.0)**0.5
-#            dnomk = ((dbdnom + s_a * dnom ** s_b)/s_a)**(1/s_b)
-#            ddnomk = dnomk-dnom
-#            M0min = (pi*f_radius**2.0) * (0.5*ddnomk) * self.rock.ResG # circular displacement field, using nominal values only
-#            Mwmin = (np.log10(M0min)-9.1)/1.5
-            
             #maximum moment (shear stress method)
-            M0max = self.faces[f_id].tau*(0.25*pi*self.faces[f_id].dia**2.0)**(3.0/2.0)
+            M0max = self.faces[f_id].tau*(0.25*np.pi*self.faces[f_id].dia**2.0)**(3.0/2.0)
             Mwmax = (np.log10(M0max)-9.1)/1.5
-            
-            #minimum moment ('rule of 10')
-            Mwmin = Mwmax - 1.0
-            
-            #sample Mw
-            s_mw = np.random.exponential(1.0/(np.log(10)*bval)) + Mwmin
-            #resample if out of range
-            count = 0
-            while 1:
-                count += 1
-                if s_mw > 1.0*Mwmax:
-                    s_mw = np.random.exponential(1.0/(np.log(10)*bval)) + Mwmin
-                else:
-                    break
-                if count > 100:
-                    break
+            # sample Mw
+            mw = exponential_trunc(1,bval=self.rock.bval,Mmax=0.0,Mwin=1.0,prob=0.1)[0] + Mwmax
+            # convert to moment magnitude (Mo)
+            mo = 10.0**(mw * 1.5 + 9.1)
+            # rupture length
+            Lr = (4*((mo/self.faces[f_id].tau)**(2/3))/np.pi)**0.5
+            # intermediate variables
+            ds = mo / ((0.25*np.pi*Lr**2.0) * self.rock.ResG)
+            d0 = 0.5 * self.faces[f_id].u_gamma * (self.faces[f_id].dia ** self.faces[f_id].u_n1)
+            bd0 = self.faces[f_id].u_a * (d0 ** self.faces[f_id].u_b)
+            d1 = d0 + ds
+            bd1 = self.faces[f_id].u_a * (d1 ** self.faces[f_id].u_b)
+            dbd = bd1- bd0
             #record stimulation magnitude
-            self.faces[f_id].Mws += [s_mw]
-            #convert to moment magnitude (Mo)
-            s_mo = 10.0**(s_mw * 1.5 + 9.1)
-            #convert to shear displacement
-            s_ds = s_mo / ((pi*f_radius**2.0) * self.rock.ResG)
-            #convert fracture length (L) to initial shear displacement (d0)
-            d0 = 0.5 * self.faces[f_id].u_gamma * ((2.0*f_radius) ** self.faces[f_id].u_n1)
-            #convert d0 to initial dilatant aperture (bd0)
-            s_bd0 = self.faces[f_id].u_a * d0 ** self.faces[f_id].u_b
-            #add stimulated displacement (s_ds) to initial displacement (d0)
-            d1 = d0 + s_ds
-            #convert new displacement (d1) to new dilatant aperture (bd1)
-            s_bd1 = self.faces[f_id].u_a * d1 ** self.faces[f_id].u_b
-            #calculate change in cumulative dilatant aperture (s_dbd)
-            s_dbd = s_bd1 - s_bd0 
+            self.faces[f_id].Mws += [mw]
             #add to zero-stress dilatant aperture
-            bd0 = self.faces[f_id].bd0 + s_dbd
+            bd0 = self.faces[f_id].bd0 + dbd
             
             #*** tensile component ***
             #if open
@@ -720,24 +754,24 @@ class mesh:
             #if closed
             else:
                 #stress closure
-                bd = bd0 * np.exp(self.faces[f_id].u_alpha*e_cen)
+                bd = bd0 * np.exp(-self.faces[f_id].u_alpha*e_cen)
                 #hydraulic aperture
                 bh = bd * self.faces[f_id].u_N
                 #note that fracture is closed
                 self.faces[f_id].hydroprop = False
             
             #*** growth ***
-            #grow fracture by larger of 10% fracture size or 1% domain size
+            #grow fracture by larger of 10% fracture size or 1% domain size #!!!
             add_dia = np.max([0.2*self.faces[f_id].dia,0.05*self.rock.size])
             self.faces[f_id].dia += add_dia
                 
         #limiters for flow solver stability
         if bh < self.rock.bh_min:
             bh = self.rock.bh_min
-#            print( '-> Alert: bh at min')
+            # print( '-> Alert: bh at min')
         elif bh > self.rock.bh_max:
             bh = self.rock.bh_max
-            print( '-> Alert: bh at max')
+            # print( '-> Alert: bh at max')
         
         #override for boundary fractures
         if (int(self.faces[f_id].typ) in [typ('boundary')]):
@@ -967,6 +1001,7 @@ class mesh:
             
         #thermal energy extraction
         dhout = []
+        self.dhout = np.asarray(self.dhout)
         if not self.dhout.any():
             dhout = np.full(len(self.ts),np.nan)
         else:
@@ -3143,1463 +3178,6 @@ class mesh:
         
         ax5.set_xlabel('Radius (m)')
         ax5.set_ylabel('Avg. Aperture (m)')
-
-
-# # ****************************************************************************
-# #### validation: heat flow - two well - compare to Amanzi
-# # ****************************************************************************
-# if True: #validation: heat flow one pipe
-#     #controlled model
-#     geom = []
-#     geom = mesh()
-    
-#     #***** input block settings *****
-#     #rock properties
-#     geom.rock.size = 600.0 #m #!!!
-#     geom.rock.ResDepth = 6000.0 # m
-#     geom.rock.ResGradient = 50.0 # C/km; average = 25 C/km
-#     geom.rock.ResRho = 2700.0 # kg/m3
-#     geom.rock.ResKt = 2.5 # W/m-K
-#     geom.rock.ResSv = 2063.0 # kJ/m3-K
-#     geom.rock.AmbTempC = 25.0 # C
-#     geom.rock.AmbPres = 0.101 #Example: 0.01 MPa #Atmospheric: 0.101 # MPa
-#     geom.rock.ResE = 50.0*GPa
-#     geom.rock.Resv = 0.3
-#     geom.rock.Ks3 = 0.5
-#     geom.rock.Ks2 = 0.75
-#     geom.rock.s3Azn = 0.0*deg
-#     geom.rock.s3AznVar = 0.0*deg
-#     geom.rock.s3Dip = 0.0*deg
-#     geom.rock.s3DipVar = 0.0*deg
-#     geom.rock.fNum = np.asarray([int(0),
-#                             int(0),
-#                             int(0)],dtype=int) #count
-#     geom.rock.fDia = np.asarray([[400.0,1200.0],
-#                             [200.0,1000.0],
-#                             [400.0,1200.0]],dtype=float) #m
-#     #FORGE rotated 104 CCW
-#     geom.rock.fStr = np.asarray([[351.0*deg,15.0*deg],
-#                             [80.0*deg,15.0*deg],
-#                             [290.0*deg,15.0*deg,]],dtype=float) #m
-#     geom.rock.fDip = np.asarray([[80.0*deg,7.0*deg],
-#                             [48.0*deg,7.0*deg,],
-#                             [64.0*deg,7.0*deg]],dtype=float) #m
-#     geom.rock.alpha = np.asarray([-0.028/MPa,-0.028/MPa,-0.028/MPa])
-#     geom.rock.gamma = np.asarray([0.01,0.01,0.01])
-#     geom.rock.n1 = np.asarray([1.0,1.0,1.0])
-#     geom.rock.a = np.asarray([0.05,0.05,0.05])
-#     geom.rock.b = np.asarray([0.8,0.8,0.8])
-#     geom.rock.N = np.asarray([0.2,0.5,1.2])
-#     geom.rock.bh = np.asarray([0.00005,0.0001,0.003])
-#     geom.rock.bh_min = 0.0030001 #0.00005 #m #!!!
-#     geom.rock.bh_max = 0.003 #0.01 #m #!!!
-#     geom.rock.bh_bound = 0.001 #!!!
-#     geom.rock.f_roughness = 0.8 #np.random.uniform(0.7,1.0) 
-#     #well parameters
-#     geom.rock.w_count = 1 #2 #wells
-#     geom.rock.w_spacing = 300.0 #m
-#     geom.rock.w_length = 100.0 #800.0 #m
-#     geom.rock.w_azimuth = 0.0*deg #rad
-#     geom.rock.w_dip = 0.0*deg #rad
-#     geom.rock.w_proportion = 1.0 #m/m
-#     geom.rock.w_phase = 0.0*deg #rad
-#     geom.rock.w_toe = 0.0*deg #rad
-#     geom.rock.w_skew = 0.0*deg #rad
-#     geom.rock.w_intervals = 1 #breaks in well length
-#     geom.rock.ra = 0.0254*5.0 #0.0254*3.0 #m
-#     geom.rock.rgh = 80.0
-#     #cement properties
-#     geom.rock.CemKt = 2.0 # W/m-K
-#     geom.rock.CemSv = 2000.0 # kJ/m3-K
-#     #thermal-electric power parameters
-#     geom.rock.GenEfficiency = 0.85 # kWe/kWt
-#     geom.rock.LifeSpan = 20.5*yr #years
-#     geom.rock.TimeSteps = 41 #steps
-#     geom.rock.p_whp = 1.0*MPa #Pa
-#     geom.rock.Tinj = 95.0 #C
-#     geom.rock.H_ConvCoef = 3.0 #kW/m2-K #!!!
-#     geom.rock.dT0 = 10.0 #K
-#     geom.rock.dE0 = 500.0 #kJ/m2
-#     #water base parameters
-#     geom.rock.PoreRho = 980.0 #kg/m3 starting guess #!!!
-#     geom.rock.Poremu = 0.25*cP #Pa-s #!!!
-#     geom.rock.Porek = 0.1*mD #m2
-#     geom.rock.Frack = 100.0*mD #m2
-#     #stimulation parameters
-#     if geom.rock.w_intervals == 1:
-#         geom.rock.perf = int(np.random.uniform(1,1))
-#     else:
-#         geom.rock.perf = 1
-#     geom.rock.r_perf = 80.0 #m
-#     geom.rock.sand = 0.3 #sand ratio in frac fluid
-#     geom.rock.leakoff = 0.0 #Carter leakoff
-#     geom.rock.dPp = -2.0*MPa #production well pressure drawdown #!!!
-#     geom.rock.dPi = 0.1*MPa 
-#     geom.rock.stim_limit = 5
-#     geom.rock.Qinj = 0.003 #m3/s
-#     geom.rock.Qstim = 0.01 #m3/s #0.08
-#     geom.rock.Vstim = 150.0 #m3
-#     geom.rock.bval = 1.0 #Gutenberg-Richter magnitude scaling
-#     geom.rock.phi = np.asarray([35.0*deg,35.0*deg,35.0*deg]) #rad
-#     geom.rock.mcc = np.asarray([10.0,10.0,10.0])*MPa #Pa
-#     geom.rock.hfmcc = 0.0*MPa #0.1*MPa
-#     geom.rock.hfphi = 30.0*deg #30.0*deg
-#     geom.Kic = 1.5*MPa #Pa-m**0.5
-#     #**********************************
-
-#     #recalculate base parameters
-#     geom.rock.re_init()
-    
-#     #generate domain
-#     geom.gen_domain()
-
-# #    #generate natural fractures
-# #    geom.gen_joint_sets()
-    
-#     #generate wells
-#     wells = []
-#     geom.gen_wells(True,wells)
-    
-#     #reference fracture for properties
-#     c0 = [0.0,0.0,0.0]
-#     dia = 800.0
-#     strike = 90.0*deg
-#     dip = 90.0*deg
-#     geom.gen_fixfrac(True,c0,dia,strike,dip)
-#     geom.fracs[-1].bh = 0.003
-    
-#     # #manual wells
-#     # geom.wells = [line(0.0,-25.0,0.0,1.0,0.0*deg,0.0*deg,'injector',geom.rock.ra,geom.rock.rgh),
-#     #               line(50.0,-25.0,0.0,1.0,0.0*deg,0.0*deg,'producer',geom.rock.ra,geom.rock.rgh)]
-    
-#     geom.re_init()
-    
-#     # #custom injector
-#     # geom.add_flowpath(np.asarray([0.0,-25.0,0.0]),
-#     #                  np.asarray([0.0,0.0,0.0]),
-#     #                  25.0,
-#     #                  1.0,
-#     #                  typ('injector'),
-#     #                  0)
-#     # geom.add_flowpath(np.asarray([50.0,-25.0,0.0]),
-#     #                  np.asarray([50.0,0.0,0.0]),
-#     #                  25.0,
-#     #                  1.0,
-#     #                  typ('producer'),
-#     #                  1)
-#     # geom.add_flowpath(np.asarray([0.0,0.0,0.0]),
-#     #                  np.asarray([50.0,0.0,0.0]),
-#     #                  50.0,
-#     #                  50.0,
-#     #                  typ('fracture'),
-#     #                  6)  
-    
-#     #random identifier (statistically should be unique)
-#     pin = np.random.randint(100000000,999999999,1)[0]
-    
-# #    #stimulate
-# #    geom.dyn_stim(Vinj=geom.rock.Vstim,Qinj=geom.rock.Qstim,target=[],
-# #                  visuals=False,fname='stim')
-    
-#     #flow
-#     geom.dyn_stim(Vinj=geom.rock.Vinj,Qinj=geom.rock.Qinj,target=[],
-#                   visuals=False,fname='run_%i' %(pin))
-    
-#     # geom.get_flow(p_bound=geom.rock.BH_P,p_well=np.asarray([None,geom.rock.BH_P+geom.rock.dPp]),q_well=np.asarray([geom.rock.Qinj,None]),reinit=False,useprior=False)
-    
-#     #heat flow
-#     geom.get_heat(plot=True)
-#     plt.savefig('plt_%i.png' %(pin), format='png')
-#     plt.close()
-    
-#     #show flow model
-#     geom.build_vtk(fname='fin_%i' %(pin))
-        
-#     if True: #3D temperature visual
-#         geom.build_pts(spacing=20.0,fname='fin_%i' %(pin))
-        
-#     #save primary inputs and outputs
-#     x = geom.save('inputs_results_valid.txt',pin)
-    
-# #    #stereoplot
-# #    geom.rock.stress.plot_Pc(geom.rock.phi[1], geom.rock.mcc[1], filename='Pc_stereoplot.png')
-    
-# #    #check vs Detournay
-# #    geom.detournay_visc(geom.rock.Qstim)
-# #    
-# #    #fracture growth plot
-# #    Vs = np.asarray(list(geom.v_Vs[3:]))[:,-2:]
-# #    Rs = np.asarray(list(geom.v_Rs[3:]))[:,-2:]
-# #    ws = np.asarray(list(geom.v_ws[3:]))[:,-2:]
-# #    ts = np.asarray(list(geom.v_ts[3:]))
-# #    Ps = np.asarray(list(geom.v_Ps[3:]))
-# #    Pn = np.asarray(list(geom.v_Pn[3:]))[:,-2:]
-
-#     #show plots
-#     pylab.show()
-    
-# ****************************************************************************
-#### validation: heat flow
-# ****************************************************************************
-if False: #validation: heat flow
-    #controlled model
-    geom = []
-    geom = mesh()
-    
-    #***** input block settings *****
-    #rock properties
-    geom.rock.size = 100.0 #m
-    geom.rock.ResDepth = 6000.0 # m
-    geom.rock.ResGradient = 50.0 # C/km; average = 25 C/km
-    geom.rock.ResRho = 2700.0 # kg/m3
-    geom.rock.ResKt = 2.5 # W/m-K
-    geom.rock.ResSv = 2063.0 # kJ/m3-K
-    geom.rock.AmbTempC = 25.0 # C
-    geom.rock.AmbPres = 0.101 #Example: 0.01 MPa #Atmospheric: 0.101 # MPa
-    geom.rock.ResE = 50.0*GPa
-    geom.rock.Resv = 0.3
-    geom.rock.Ks3 = 0.5
-    geom.rock.Ks2 = 0.75
-    geom.rock.s3Azn = 0.0*deg
-    geom.rock.s3AznVar = 0.0*deg
-    geom.rock.s3Dip = 0.0*deg
-    geom.rock.s3DipVar = 0.0*deg
-    geom.rock.fNum = np.asarray([int(0),
-                            int(0),
-                            int(0)],dtype=int) #count
-    geom.rock.fDia = np.asarray([[400.0,1200.0],
-                            [200.0,1000.0],
-                            [400.0,1200.0]],dtype=float) #m
-    #FORGE rotated 104 CCW
-    geom.rock.fStr = np.asarray([[351.0*deg,15.0*deg],
-                            [80.0*deg,15.0*deg],
-                            [290.0*deg,15.0*deg,]],dtype=float) #m
-    geom.rock.fDip = np.asarray([[80.0*deg,7.0*deg],
-                            [48.0*deg,7.0*deg,],
-                            [64.0*deg,7.0*deg]],dtype=float) #m
-    geom.rock.alpha = np.asarray([-0.028/MPa,-0.028/MPa,-0.028/MPa])
-    geom.rock.gamma = np.asarray([0.01,0.01,0.01])
-    geom.rock.n1 = np.asarray([1.0,1.0,1.0])
-    geom.rock.a = np.asarray([0.05,0.05,0.05])
-    geom.rock.b = np.asarray([0.8,0.8,0.8])
-    geom.rock.N = np.asarray([0.2,0.5,1.2])
-    geom.rock.bh = np.asarray([0.00005,0.0001,0.003])
-    geom.rock.bh_min = 0.0030001 #0.00005 #m #!!!
-    geom.rock.bh_max = 0.003 #0.01 #m #!!!
-    geom.rock.bh_bound = 0.001
-    geom.rock.f_roughness = np.random.uniform(0.7,1.0) #0.8
-    #well parameters
-    geom.rock.w_count = 1 #2 #wells
-    geom.rock.w_spacing = 50.0 #m
-    geom.rock.w_length = 100.0 #800.0 #m
-    geom.rock.w_azimuth = 0.0*deg #rad
-    geom.rock.w_dip = 0.0*deg #rad
-    geom.rock.w_proportion = 1.0 #m/m
-    geom.rock.w_phase = 0.0*deg #rad
-    geom.rock.w_toe = 0.0*deg #rad
-    geom.rock.w_skew = 0.0*deg #rad
-    geom.rock.w_intervals = 1 #breaks in well length
-    geom.rock.ra = 0.0254*5.0 #0.0254*3.0 #m
-    geom.rock.rgh = 80.0
-    #cement properties
-    geom.rock.CemKt = 2.0 # W/m-K
-    geom.rock.CemSv = 2000.0 # kJ/m3-K
-    #thermal-electric power parameters
-    geom.rock.GenEfficiency = 0.85 # kWe/kWt
-    geom.rock.LifeSpan = 20.5*yr #years
-    geom.rock.TimeSteps = 41 #steps
-    geom.rock.p_whp = 1.0*MPa #Pa
-    geom.rock.Tinj = 95.0 #C
-    geom.rock.H_ConvCoef = 3.0 #kW/m2-K
-    geom.rock.dT0 = 10.0 #K
-    geom.rock.dE0 = 500.0 #kJ/m2
-    #water base parameters
-    geom.rock.PoreRho = 980.0 #kg/m3 starting guess
-    geom.rock.Poremu = 0.9*cP #Pa-s
-    geom.rock.Porek = 0.1*mD #m2
-    geom.rock.Frack = 100.0*mD #m2
-    #stimulation parameters
-    if geom.rock.w_intervals == 1:
-        geom.rock.perf = int(np.random.uniform(1,1))
-    else:
-        geom.rock.perf = 1
-    geom.rock.r_perf = 80.0 #m
-    geom.rock.sand = 0.3 #sand ratio in frac fluid
-    geom.rock.leakoff = 0.0 #Carter leakoff
-    geom.rock.dPp = -2.0*MPa #production well pressure drawdown
-    geom.rock.dPi = 0.1*MPa 
-    geom.rock.stim_limit = 5
-    geom.rock.Qinj = 0.01 #m3/s
-    geom.rock.Qstim = 0.08 #m3/s
-    geom.rock.Vstim = 150.0 #m3
-    geom.rock.bval = 1.0 #Gutenberg-Richter magnitude scaling
-    geom.rock.phi = np.asarray([35.0*deg,35.0*deg,35.0*deg]) #rad
-    geom.rock.mcc = np.asarray([10.0,10.0,10.0])*MPa #Pa
-    geom.rock.hfmcc = 0.0*MPa #0.1*MPa
-    geom.rock.hfphi = 30.0*deg #30.0*deg
-    geom.Kic = 1.5*MPa #Pa-m**0.5
-    #**********************************
-
-    #recalculate base parameters
-    geom.rock.re_init()
-    
-    #generate domain
-    geom.gen_domain()
-
-    #generate natural fractures
-    geom.gen_joint_sets()
-    
-    #generate wells
-    wells = []
-    geom.gen_wells(True,wells)
-    
-    #random identifier (statistically should be unique)
-    pin = np.random.randint(100000000,999999999,1)[0]
-    
-    #stimulate
-    geom.dyn_stim(Vinj=geom.rock.Vstim,Qinj=geom.rock.Qstim,target=[],
-                  visuals=False,fname='stim')
-    
-    #flow
-    geom.dyn_stim(Vinj=geom.rock.Vinj,Qinj=geom.rock.Qinj,target=[],
-                  visuals=False,fname='run_%i' %(pin))
-    
-    #heat flow
-    geom.get_heat(plot=True)
-    plt.savefig('plt_%i.png' %(pin), format='png')
-    plt.close()
-    
-    #show flow model
-    geom.build_vtk(fname='fin_%i' %(pin))
-        
-    if True: #3D temperature visual
-        geom.build_pts(spacing=2.5,fname='fin_%i' %(pin))
-        
-    #save primary inputs and outputs
-    x = geom.save('inputs_results_valid.txt',pin)
-    
-#    #stereoplot
-#    geom.rock.stress.plot_Pc(geom.rock.phi[1], geom.rock.mcc[1], filename='Pc_stereoplot.png')
-    
-#    #check vs Detournay
-#    geom.detournay_visc(geom.rock.Qstim)
-#    
-#    #fracture growth plot
-#    Vs = np.asarray(list(geom.v_Vs[3:]))[:,-2:]
-#    Rs = np.asarray(list(geom.v_Rs[3:]))[:,-2:]
-#    ws = np.asarray(list(geom.v_ws[3:]))[:,-2:]
-#    ts = np.asarray(list(geom.v_ts[3:]))
-#    Ps = np.asarray(list(geom.v_Ps[3:]))
-#    Pn = np.asarray(list(geom.v_Pn[3:]))[:,-2:]
-
-    #show plots
-    pylab.show()
-
-# ****************************************************************************
-#### validation: stress stereonet
-# ****************************************************************************        
-if False: #validation: stress stereonet
-    #controlled model
-    geom = []
-    geom = mesh()
-    
-    #***** input block settings *****
-    #rock properties
-    geom.rock.size = 1000.0 #m
-    geom.rock.ResDepth = 6000.0 # m
-    geom.rock.ResGradient = 50.0 # C/km; average = 25 C/km
-    geom.rock.ResRho = 2700.0 # kg/m3
-    geom.rock.ResKt = 2.5 # W/m-K
-    geom.rock.ResSv = 2063.0 # kJ/m3-K
-    geom.rock.AmbTempC = 25.0 # C
-    geom.rock.AmbPres = 0.101 #Example: 0.01 MPa #Atmospheric: 0.101 # MPa
-    geom.rock.ResE = 50.0*GPa
-    geom.rock.Resv = 0.3
-    geom.rock.Ks3 = 0.5
-    geom.rock.Ks2 = 0.75
-    geom.rock.s3Azn = 0.0*deg
-    geom.rock.s3AznVar = 0.0*deg
-    geom.rock.s3Dip = 0.0*deg
-    geom.rock.s3DipVar = 0.0*deg
-    geom.rock.fNum = np.asarray([int(0),
-                            int(0),
-                            int(0)],dtype=int) #count
-    geom.rock.fDia = np.asarray([[400.0,1200.0],
-                            [200.0,1000.0],
-                            [400.0,1200.0]],dtype=float) #m
-    #FORGE rotated 104 CCW
-    geom.rock.fStr = np.asarray([[351.0*deg,15.0*deg],
-                            [80.0*deg,15.0*deg],
-                            [290.0*deg,15.0*deg,]],dtype=float) #m
-    geom.rock.fDip = np.asarray([[80.0*deg,7.0*deg],
-                            [48.0*deg,7.0*deg,],
-                            [64.0*deg,7.0*deg]],dtype=float) #m
-    geom.rock.alpha = np.asarray([-0.028/MPa,-0.028/MPa,-0.028/MPa])
-    geom.rock.gamma = np.asarray([0.01,0.01,0.01])
-    geom.rock.n1 = np.asarray([1.0,1.0,1.0])
-    geom.rock.a = np.asarray([0.05,0.05,0.05])
-    geom.rock.b = np.asarray([0.8,0.8,0.8])
-    geom.rock.N = np.asarray([0.2,0.5,1.2])
-    geom.rock.bh = np.asarray([0.00005,0.0001,0.003])
-    geom.rock.bh_min = 0.0030001 #0.00005 #m #!!!
-    geom.rock.bh_max = 0.003 #0.01 #m #!!!
-    geom.rock.bh_bound = 0.001
-    geom.rock.f_roughness = np.random.uniform(0.7,1.0) #0.8
-    #well parameters
-    geom.rock.w_count = 0 #2 #wells
-    geom.rock.w_spacing = 400.0 #m
-    geom.rock.w_length = 500.0 #800.0 #m
-    geom.rock.w_azimuth = 0.0*deg #rad
-    geom.rock.w_dip = 0.0*deg #rad
-    geom.rock.w_proportion = 0.5 #m/m
-    geom.rock.w_phase = 90.0*deg #rad
-    geom.rock.w_toe = 0.0*deg #rad
-    geom.rock.w_skew = 0.0*deg #rad
-    geom.rock.w_intervals = 2 #breaks in well length
-    geom.rock.ra = 0.0254*5.0 #0.0254*3.0 #m
-    geom.rock.rgh = 80.0
-    #cement properties
-    geom.rock.CemKt = 2.0 # W/m-K
-    geom.rock.CemSv = 2000.0 # kJ/m3-K
-    #thermal-electric power parameters
-    geom.rock.GenEfficiency = 0.85 # kWe/kWt
-    geom.rock.LifeSpan = 20.5*yr #years
-    geom.rock.TimeSteps = 41 #steps
-    geom.rock.p_whp = 1.0*MPa #Pa
-    geom.rock.Tinj = 95.0 #C
-    geom.rock.H_ConvCoef = 3.0 #kW/m2-K
-    geom.rock.dT0 = 10.0 #K
-    geom.rock.dE0 = 500.0 #kJ/m2
-    #water base parameters
-    geom.rock.PoreRho = 980.0 #kg/m3 starting guess
-    geom.rock.Poremu = 0.9*cP #Pa-s
-    geom.rock.Porek = 0.1*mD #m2
-    geom.rock.Frack = 100.0*mD #m2
-    #stimulation parameters
-    if geom.rock.w_intervals == 1:
-        geom.rock.perf = int(np.random.uniform(1,1))
-    else:
-        geom.rock.perf = 1
-    geom.rock.r_perf = 50.0 #m
-    geom.rock.sand = 0.3 #sand ratio in frac fluid
-    geom.rock.leakoff = 0.0 #Carter leakoff
-    geom.rock.dPp = -2.0*MPa #production well pressure drawdown
-    geom.rock.dPi = 0.1*MPa 
-    geom.rock.stim_limit = 5
-    geom.rock.Qinj = 0.003 #m3/s
-    geom.rock.Qstim = 0.08 #m3/s
-    geom.rock.Vstim = 150.0 #m3
-    geom.rock.bval = 1.0 #Gutenberg-Richter magnitude scaling
-    geom.rock.phi = np.asarray([35.0*deg,35.0*deg,35.0*deg]) #rad
-    geom.rock.mcc = np.asarray([10.0,10.0,10.0])*MPa #Pa
-    geom.rock.hfmcc = 0.0*MPa #0.1*MPa
-    geom.rock.hfphi = 30.0*deg #30.0*deg
-    geom.Kic = 1.5*MPa #Pa-m**0.5
-    #**********************************
-
-    #recalculate base parameters
-    geom.rock.re_init()
-    
-    #generate domain
-    geom.gen_domain()
-
-    #generate natural fractures
-    geom.gen_joint_sets()
-    
-    #horizontal
-    c0 = [0.0,0.0,-500.0]
-    dia = 150.0
-    strike = 0.0*deg
-    dip = 0.0*deg
-    geom.gen_fixfrac(True,c0,dia,strike,dip)
-    
-    #verical x-dir
-    c0 = [0.0,500.0,0.0]
-    dia = 150.0
-    strike = 90.0*deg
-    dip = 90.0*deg
-    geom.gen_fixfrac(False,c0,dia,strike,dip)
-
-    #slope x-dir
-    c0 = [0.0,250.0,-250.0]
-    dia = 150.0
-    strike = 90.0*deg
-    dip = 45.0*deg
-    geom.gen_fixfrac(False,c0,dia,strike,dip)
-    
-    #vertical y-dir
-    c0 = [-500.0,0.0,0.0]
-    dia = 150.0
-    strike = 0.0*deg
-    dip = 90.0*deg
-    geom.gen_fixfrac(False,c0,dia,strike,dip)
-
-    #slope y-dir
-    c0 = [-250.0,0.0,-250.0]
-    dia = 150.0
-    strike = 0.0*deg
-    dip = 45.0*deg
-    geom.gen_fixfrac(False,c0,dia,strike,dip)
-    
-    #skew vertical
-    c0 = [-353.0,353.0,0.0]
-    dia = 150.0
-    strike = 45.0*deg
-    dip = 90.0*deg
-    geom.gen_fixfrac(False,c0,dia,strike,dip)
-
-    #skew slope
-    c0 = [-176.0,176.0,-250.0]
-    dia = 150.0
-    strike = 45.0*deg
-    dip = 45.0*deg
-    geom.gen_fixfrac(False,c0,dia,strike,dip)
-    #******
-
-    #verical x-dir
-    c0 = [0.0,-500.0,0.0]
-    dia = 150.0
-    strike = 270.0*deg
-    dip = 90.0*deg
-    geom.gen_fixfrac(False,c0,dia,strike,dip)
-
-    #slope x-dir
-    c0 = [0.0,-250.0,-250.0]
-    dia = 150.0
-    strike = 270.0*deg
-    dip = 45.0*deg
-    geom.gen_fixfrac(False,c0,dia,strike,dip)
-    
-    #vertical y-dir
-    c0 = [500.0,0.0,0.0]
-    dia = 150.0
-    strike = 180.0*deg
-    dip = 90.0*deg
-    geom.gen_fixfrac(False,c0,dia,strike,dip)
-
-    #slope y-dir
-    c0 = [250.0,0.0,-250.0]
-    dia = 150.0
-    strike = 180.0*deg
-    dip = 45.0*deg
-    geom.gen_fixfrac(False,c0,dia,strike,dip)
-    
-    #skew vertical
-    c0 = [353.0,-353.0,0.0]
-    dia = 150.0
-    strike = 225.0*deg
-    dip = 90.0*deg
-    geom.gen_fixfrac(False,c0,dia,strike,dip)
-
-    #skew slope
-    c0 = [176.0,-176.0,-250.0]
-    dia = 150.0
-    strike = 225.0*deg
-    dip = 45.0*deg
-    geom.gen_fixfrac(False,c0,dia,strike,dip)
-    #******
-
-    #skew vertical
-    c0 = [-353.0,-353.0,0.0]
-    dia = 150.0
-    strike = 315.0*deg
-    dip = 90.0*deg
-    geom.gen_fixfrac(False,c0,dia,strike,dip)
-
-    #skew slope
-    c0 = [-176.0,-176.0,-250.0]
-    dia = 150.0
-    strike = 315.0*deg
-    dip = 45.0*deg
-    geom.gen_fixfrac(False,c0,dia,strike,dip)
-    #******
-
-    #skew vertical
-    c0 = [353.0,353.0,0.0]
-    dia = 150.0
-    strike = 135.0*deg
-    dip = 90.0*deg
-    geom.gen_fixfrac(False,c0,dia,strike,dip)
-
-    #skew slope
-    c0 = [176.0,176.0,-250.0]
-    dia = 150.0
-    strike = 135.0*deg
-    dip = 45.0*deg
-    geom.gen_fixfrac(False,c0,dia,strike,dip)
-    #******
-    
-    #generate wells
-    wells = []
-    geom.gen_wells(True,wells)
-    
-    #random identifier (statistically should be unique)
-    pin = np.random.randint(100000000,999999999,1)[0]
-    
-    #stimulate
-    geom.dyn_stim(Vinj=geom.rock.Vstim,Qinj=geom.rock.Qstim,target=[],
-                  visuals=False,fname='stim')
-    
-#    #flow
-#    geom.dyn_stim(Vinj=geom.rock.Vinj,Qinj=geom.rock.Qinj,target=[],
-#                  visuals=False,fname='run_%i' %(pin))
-#    
-#    #heat flow
-#    geom.get_heat(plot=True)
-#    plt.savefig('plt_%i.png' %(pin), format='png')
-#    plt.close()
-#    
-    #show flow model
-    geom.build_vtk(fname='fin_%i' %(pin))
-#        
-#    if True: #3D temperature visual
-#        geom.build_pts(spacing=50.0,fname='fin_%i' %(pin))
-        
-    #save primary inputs and outputs
-    x = geom.save('inputs_results_valid.txt',pin)
-    
-    #stereoplot
-    geom.rock.stress.plot_Pc(geom.rock.phi[1], geom.rock.mcc[1], filename='Pc_stereoplot.png')
-    
-#    #check vs Detournay
-#    geom.detournay_visc(geom.rock.Qstim)
-#    
-#    #fracture growth plot
-#    Vs = np.asarray(list(geom.v_Vs[3:]))[:,-2:]
-#    Rs = np.asarray(list(geom.v_Rs[3:]))[:,-2:]
-#    ws = np.asarray(list(geom.v_ws[3:]))[:,-2:]
-#    ts = np.asarray(list(geom.v_ts[3:]))
-#    Ps = np.asarray(list(geom.v_Ps[3:]))
-#    Pn = np.asarray(list(geom.v_Pn[3:]))[:,-2:]
-
-    #show plots
-    pylab.show()
-        
-        
-# ****************************************************************************
-#### validation: inj only with hydrofrac
-# ****************************************************************************         
-if False: #validation: inj only with hydrofrac
-    #controlled model
-    geom = []
-    geom = mesh()
-    
-    #***** input block settings *****
-    #rock properties
-    geom.rock.size = 1000.0 #m
-    geom.rock.ResDepth = 6000.0 # m
-    geom.rock.ResGradient = 50.0 # C/km; average = 25 C/km
-    geom.rock.ResRho = 2700.0 # kg/m3
-    geom.rock.ResKt = 2.5 # W/m-K
-    geom.rock.ResSv = 2063.0 # kJ/m3-K
-    geom.rock.AmbTempC = 25.0 # C
-    geom.rock.AmbPres = 0.101 #Example: 0.01 MPa #Atmospheric: 0.101 # MPa
-    geom.rock.ResE = 50.0*GPa
-    geom.rock.Resv = 0.3
-    geom.rock.Ks3 = 0.5
-    geom.rock.Ks2 = 0.75
-    geom.rock.s3Azn = 0.0*deg
-    geom.rock.s3AznVar = 0.0*deg
-    geom.rock.s3Dip = 0.0*deg
-    geom.rock.s3DipVar = 0.0*deg
-    geom.rock.fNum = np.asarray([int(0),
-                            int(0),
-                            int(0)],dtype=int) #count
-    geom.rock.fDia = np.asarray([[400.0,1200.0],
-                            [200.0,1000.0],
-                            [400.0,1200.0]],dtype=float) #m
-    #FORGE rotated 104 CCW
-    geom.rock.fStr = np.asarray([[351.0*deg,15.0*deg],
-                            [80.0*deg,15.0*deg],
-                            [290.0*deg,15.0*deg,]],dtype=float) #m
-    geom.rock.fDip = np.asarray([[80.0*deg,7.0*deg],
-                            [48.0*deg,7.0*deg,],
-                            [64.0*deg,7.0*deg]],dtype=float) #m
-    geom.rock.alpha = np.asarray([-0.028/MPa,-0.028/MPa,-0.028/MPa])
-    geom.rock.gamma = np.asarray([0.01,0.01,0.01])
-    geom.rock.n1 = np.asarray([1.0,1.0,1.0])
-    geom.rock.a = np.asarray([0.05,0.05,0.05])
-    geom.rock.b = np.asarray([0.8,0.8,0.8])
-    geom.rock.N = np.asarray([0.2,0.5,1.2])
-    geom.rock.bh = np.asarray([0.00005,0.0001,0.003])
-    geom.rock.bh_min = 0.0030001 #0.00005 #m #!!!
-    geom.rock.bh_max = 0.003 #0.01 #m #!!!
-    geom.rock.bh_bound = 0.001
-    geom.rock.f_roughness = np.random.uniform(0.7,1.0) #0.8
-    #well parameters
-    geom.rock.w_count = 0 #2 #wells
-    geom.rock.w_spacing = 400.0 #m
-    geom.rock.w_length = 500.0 #800.0 #m
-    geom.rock.w_azimuth = 0.0*deg #rad
-    geom.rock.w_dip = 0.0*deg #rad
-    geom.rock.w_proportion = 0.5 #m/m
-    geom.rock.w_phase = 90.0*deg #rad
-    geom.rock.w_toe = 0.0*deg #rad
-    geom.rock.w_skew = 0.0*deg #rad
-    geom.rock.w_intervals = 2 #breaks in well length
-    geom.rock.ra = 0.0254*5.0 #0.0254*3.0 #m
-    geom.rock.rgh = 80.0
-    #cement properties
-    geom.rock.CemKt = 2.0 # W/m-K
-    geom.rock.CemSv = 2000.0 # kJ/m3-K
-    #thermal-electric power parameters
-    geom.rock.GenEfficiency = 0.85 # kWe/kWt
-    geom.rock.LifeSpan = 20.5*yr #years
-    geom.rock.TimeSteps = 41 #steps
-    geom.rock.p_whp = 1.0*MPa #Pa
-    geom.rock.Tinj = 95.0 #C
-    geom.rock.H_ConvCoef = 3.0 #kW/m2-K
-    geom.rock.dT0 = 10.0 #K
-    geom.rock.dE0 = 500.0 #kJ/m2
-    #water base parameters
-    geom.rock.PoreRho = 980.0 #kg/m3 starting guess
-    geom.rock.Poremu = 0.9*cP #Pa-s
-    geom.rock.Porek = 0.1*mD #m2
-    geom.rock.Frack = 100.0*mD #m2
-    #stimulation parameters
-    if geom.rock.w_intervals == 1:
-        geom.rock.perf = int(np.random.uniform(1,1))
-    else:
-        geom.rock.perf = 1
-    geom.rock.r_perf = 50.0 #m
-    geom.rock.sand = 0.3 #sand ratio in frac fluid
-    geom.rock.leakoff = 0.0 #Carter leakoff
-    geom.rock.dPp = -2.0*MPa #production well pressure drawdown
-    geom.rock.dPi = 0.1*MPa 
-    geom.rock.stim_limit = 5
-    geom.rock.Qinj = 0.003 #m3/s
-    geom.rock.Qstim = 0.08 #m3/s
-    geom.rock.Vstim = 100000.0 #m3
-    geom.rock.bval = 1.0 #Gutenberg-Richter magnitude scaling
-    geom.rock.phi = np.asarray([35.0*deg,35.0*deg,35.0*deg]) #rad
-    geom.rock.mcc = np.asarray([10.0,10.0,10.0])*MPa #Pa
-    geom.rock.hfmcc = 0.0*MPa #0.1*MPa
-    geom.rock.hfphi = 30.0*deg #30.0*deg
-    geom.Kic = 1.5*MPa #Pa-m**0.5
-    #**********************************
-
-    #recalculate base parameters
-    geom.rock.re_init()
-    
-    #generate domain
-    geom.gen_domain()
-
-    #generate natural fractures
-    geom.gen_joint_sets()
-    
-    #generate wells
-    wells = []
-    geom.gen_wells(True,wells)
-    
-    #random identifier (statistically should be unique)
-    pin = np.random.randint(100000000,999999999,1)[0]
-    
-    #stimulate
-    geom.dyn_stim(Vinj=geom.rock.Vstim,Qinj=geom.rock.Qstim,target=[],
-                  visuals=False,fname='stim')
-    
-#    #flow
-#    geom.dyn_stim(Vinj=geom.rock.Vinj,Qinj=geom.rock.Qinj,target=[],
-#                  visuals=False,fname='run_%i' %(pin))
-#    
-#    #heat flow
-#    geom.get_heat(plot=True)
-#    plt.savefig('plt_%i.png' %(pin), format='png')
-#    plt.close()
-#    
-#    #show flow model
-#    geom.build_vtk(fname='fin_%i' %(pin))
-#        
-#    if True: #3D temperature visual
-#        geom.build_pts(spacing=50.0,fname='fin_%i' %(pin))
-        
-    #save primary inputs and outputs
-    x = geom.save('inputs_results_valid.txt',pin)
-    
-    #stereoplot
-    geom.rock.stress.plot_Pc(geom.rock.phi[1], geom.rock.mcc[1], filename='Pc_stereoplot.png')
-    
-    #check vs Detournay
-    geom.detournay_visc(geom.rock.Qstim)
-    
-    #fracture growth plot
-    Vs = np.asarray(list(geom.v_Vs[3:]))[:,-2:]
-    Rs = np.asarray(list(geom.v_Rs[3:]))[:,-2:]
-    ws = np.asarray(list(geom.v_ws[3:]))[:,-2:]
-    ts = np.asarray(list(geom.v_ts[3:]))
-    Ps = np.asarray(list(geom.v_Ps[3:]))
-    Pn = np.asarray(list(geom.v_Pn[3:]))[:,-2:]
-
-    #show plots
-    pylab.show()
-
-# ****************************************************************************
-#### validation: two inj two pro two natfrac
-# **************************************************************************** 
-if False: #validation: two inj two pro two natfrac 
-    #controlled model
-    geom = []
-    geom = mesh()
-    
-    #***** input block settings *****
-    #rock properties
-    geom.rock.size = 1000.0 #m
-    geom.rock.ResDepth = 6000.0 # m
-    geom.rock.ResGradient = 50.0 # C/km; average = 25 C/km
-    geom.rock.ResRho = 2700.0 # kg/m3
-    geom.rock.ResKt = 2.5 # W/m-K
-    geom.rock.ResSv = 2063.0 # kJ/m3-K
-    geom.rock.AmbTempC = 25.0 # C
-    geom.rock.AmbPres = 0.101 #Example: 0.01 MPa #Atmospheric: 0.101 # MPa
-    geom.rock.ResE = 50.0*GPa
-    geom.rock.Resv = 0.3
-    geom.rock.Ks3 = 0.5
-    geom.rock.Ks2 = 0.75
-    geom.rock.s3Azn = 0.0*deg
-    geom.rock.s3AznVar = 0.0*deg
-    geom.rock.s3Dip = 0.0*deg
-    geom.rock.s3DipVar = 0.0*deg
-    geom.rock.fNum = np.asarray([int(0),
-                            int(0),
-                            int(0)],dtype=int) #count
-    geom.rock.fDia = np.asarray([[400.0,1200.0],
-                            [200.0,1000.0],
-                            [400.0,1200.0]],dtype=float) #m
-    #FORGE rotated 104 CCW
-    geom.rock.fStr = np.asarray([[351.0*deg,15.0*deg],
-                            [80.0*deg,15.0*deg],
-                            [290.0*deg,15.0*deg,]],dtype=float) #m
-    geom.rock.fDip = np.asarray([[80.0*deg,7.0*deg],
-                            [48.0*deg,7.0*deg,],
-                            [64.0*deg,7.0*deg]],dtype=float) #m
-    geom.rock.alpha = np.asarray([-0.028/MPa,-0.028/MPa,-0.028/MPa])
-    geom.rock.gamma = np.asarray([0.01,0.01,0.01])
-    geom.rock.n1 = np.asarray([1.0,1.0,1.0])
-    geom.rock.a = np.asarray([0.05,0.05,0.05])
-    geom.rock.b = np.asarray([0.8,0.8,0.8])
-    geom.rock.N = np.asarray([0.2,0.5,1.2])
-    geom.rock.bh = np.asarray([0.00005,0.0001,0.003])
-    geom.rock.bh_min = 0.0030001 #0.00005 #m #!!!
-    geom.rock.bh_max = 0.003 #0.01 #m #!!!
-    geom.rock.bh_bound = 0.001
-    geom.rock.f_roughness = np.random.uniform(0.7,1.0) #0.8
-    #well parameters
-    geom.rock.w_count = 2 #2 #wells
-    geom.rock.w_spacing = 200.0 #m
-    geom.rock.w_length = 500.0 #800.0 #m
-    geom.rock.w_azimuth = 10.0*deg #rad
-    geom.rock.w_dip = 5.0*deg #rad
-    geom.rock.w_proportion = 0.5 #m/m
-    geom.rock.w_phase = -30.0*deg #rad
-    geom.rock.w_toe = -10.0*deg #rad
-    geom.rock.w_skew = 10.0*deg #rad
-    geom.rock.w_intervals = 2 #breaks in well length
-    geom.rock.ra = 0.0254*5.0 #0.0254*3.0 #m
-    geom.rock.rgh = 80.0
-    #cement properties
-    geom.rock.CemKt = 2.0 # W/m-K
-    geom.rock.CemSv = 2000.0 # kJ/m3-K
-    #thermal-electric power parameters
-    geom.rock.GenEfficiency = 0.85 # kWe/kWt
-    geom.rock.LifeSpan = 20.5*yr #years
-    geom.rock.TimeSteps = 41 #steps
-    geom.rock.p_whp = 1.0*MPa #Pa
-    geom.rock.Tinj = 95.0 #C
-    geom.rock.H_ConvCoef = 3.0 #kW/m2-K
-    geom.rock.dT0 = 10.0 #K
-    geom.rock.dE0 = 500.0 #kJ/m2
-    #water base parameters
-    geom.rock.PoreRho = 980.0 #kg/m3 starting guess
-    geom.rock.Poremu = 0.9*cP #Pa-s
-    geom.rock.Porek = 0.1*mD #m2
-    geom.rock.Frack = 100.0*mD #m2
-    #stimulation parameters
-    if geom.rock.w_intervals == 1:
-        geom.rock.perf = int(np.random.uniform(1,1))
-    else:
-        geom.rock.perf = 1
-    geom.rock.r_perf = 50.0 #m
-    geom.rock.sand = 0.3 #sand ratio in frac fluid
-    geom.rock.leakoff = 0.0 #Carter leakoff
-    geom.rock.dPp = -2.0*MPa #production well pressure drawdown
-    geom.rock.dPi = 0.5*MPa 
-    geom.rock.stim_limit = 5
-    geom.rock.Qinj = 0.003 #m3/s
-    geom.rock.Qstim = 0.08 #m3/s
-    geom.rock.Vstim = 100000.0 #m3
-    geom.rock.bval = 1.0 #Gutenberg-Richter magnitude scaling
-    geom.rock.phi = np.asarray([35.0*deg,35.0*deg,35.0*deg]) #rad
-    geom.rock.mcc = np.asarray([10.0,10.0,10.0])*MPa #Pa
-    geom.rock.hfmcc = 0.1*MPa #0.1*MPa
-    geom.rock.hfphi = 30.0*deg #30.0*deg
-    #**********************************
-
-    #recalculate base parameters
-    geom.rock.re_init()
-    
-    #generate domain
-    geom.gen_domain()
-
-    #generate natural fractures
-    geom.gen_joint_sets()
-    
-    #generate fixed joint sets
-    c0 = [-50.0,80.0,25.0]
-    dia = 500.0
-    strike = 100.0*deg
-    dip = 80.0*deg
-    geom.gen_fixfrac(True,c0,dia,strike,dip)
-    
-    c0 = [50.0,-80.0,-25.0]
-    dia = 600.0
-    strike = 280.0*deg
-    dip = 80.0*deg
-    geom.gen_fixfrac(False,c0,dia,strike,dip)
-
-    c0 = [0.0,0.0,-999.0]
-    dia = 999.0
-    strike = 0.0*deg
-    dip = 0.0*deg
-    geom.gen_fixfrac(False,c0,dia,strike,dip)
-
-    c0 = [0.0,-999.0,0.0]
-    dia = 999.0
-    strike = 90.0*deg
-    dip = 90.0*deg
-    geom.gen_fixfrac(False,c0,dia,strike,dip)
-
-    c0 = [-999.0,0.0,0.0]
-    dia = 999.0
-    strike = 0.0*deg
-    dip = 90.0*deg
-    geom.gen_fixfrac(False,c0,dia,strike,dip)
-    
-    #generate wells
-    wells = []
-    geom.gen_wells(True,wells)
-    
-    #random identifier (statistically should be unique)
-    pin = np.random.randint(100000000,999999999,1)[0]
-    
-#    #stimulate
-#    geom.dyn_stim(Vinj=geom.rock.Vstim,Qinj=geom.rock.Qstim,target=[],
-#                  visuals=False,fname='stim')
-    
-    #flow
-    geom.dyn_stim(Vinj=geom.rock.Vinj,Qinj=geom.rock.Qinj,target=[],
-                  visuals=False,fname='run_%i' %(pin))
-    
-    #heat flow
-    geom.get_heat(plot=True)
-    plt.savefig('plt_%i.png' %(pin), format='png')
-    plt.close()
-    
-    #show flow model
-    geom.build_vtk(fname='fin_%i' %(pin))
-        
-    if False: #3D temperature visual
-        geom.build_pts(spacing=50.0,fname='fin_%i' %(pin))
-        
-    #save primary inputs and outputs
-    x = geom.save('inputs_results_valid.txt',pin)
-    
-    #show plots
-    pylab.show()
-
-# ****************************************************************************
-#### randomized inputs w/ scaled flow
-# ****************************************************************************         
-if False: #randomized inputs w/ scaled flow
-    #full randomizer
-    for i in range(0,1):
-        geom = []
-        geom = mesh()
-        
-#        #***** input block randomizer *****
-#        #rock properties
-        geom.rock.size = 1500.0 #m
-        geom.rock.ResDepth = np.random.uniform(4000.0,8000.0) #6000.0 # m #!!!
-        geom.rock.ResGradient = np.random.uniform(40.0,50.0) #50.0 #56.70 # C/km; average = 25 C/km
-        geom.rock.ResRho = np.random.uniform(2700.0,2700.0) #2700.0 # kg/m3
-        geom.rock.ResKt = np.random.uniform(2.1,2.8) #2.5 # W/m-K
-        geom.rock.ResSv = np.random.uniform(1900.0,2200.0) #2063.0 # kJ/m3-K
-        geom.rock.AmbTempC = np.random.uniform(20.0,20.0) #25.0 # C
-        geom.rock.AmbPres = 0.101 #Example: 0.01 MPa #Atmospheric: 0.101 # MPa
-        geom.rock.ResE = np.random.uniform(30.0,90.0)*GPa #50.0*GPa
-        geom.rock.Resv = np.random.uniform(0.15,0.35) #0.3
-        geom.rock.Ks3 = np.random.uniform(0.3,0.9) #0.5 #!!!
-        geom.rock.Ks2 = geom.rock.Ks3 + np.random.uniform(0.0,0.6) # 0.75 #!!!
-        geom.rock.s3Azn = 0.0*deg
-        geom.rock.s3AznVar = 0.0*deg
-        geom.rock.s3Dip = 0.0*deg
-        geom.rock.s3DipVar = 0.0*deg
-        #fracture orientation parameters #[i,:] set, [0,0:2] min, max --or-- nom, std
-#        geom.rock.fNum = np.asarray([int(np.random.uniform(0,30)),
-#                                int(np.random.uniform(0,30)),
-#                                int(np.random.uniform(0,30))],dtype=int) #count
-#        r1 = np.random.uniform(50.0,800.0)
-#        r2 = np.random.uniform(50.0,800.0)
-#        r3 = np.random.uniform(50.0,800.0)
-#        geom.rock.fDia = np.asarray([[r1,r1+np.random.uniform(100.0,800.0)],
-#                                [r2,r2+np.random.uniform(100.0,800.0)],
-#                                [r3,r3+np.random.uniform(100.0,800.0)]],dtype=float) #m
-#        geom.rock.fStr = np.asarray([[np.random.uniform(0.0,360.0)*deg,np.random.uniform(0.0,90.0)*deg],
-#                                [np.random.uniform(0.0,360.0)*deg,np.random.uniform(0.0,90.0)*deg],
-#                                [np.random.uniform(0.0,360.0)*deg,np.random.uniform(0.0,90.0)*deg]],dtype=float) #m
-#        geom.rock.fDip = np.asarray([[np.random.uniform(0.0,90.0)*deg,np.random.uniform(0.0,45.0)*deg],
-#                                [np.random.uniform(0.0,90.0)*deg,np.random.uniform(0.0,45.0)*deg],
-#                                [np.random.uniform(0.0,90.0)*deg,np.random.uniform(0.0,45.0)*deg]],dtype=float) #m
-        geom.rock.fNum = np.asarray([int(np.random.uniform(0,30)),
-                                int(np.random.uniform(0,120)),
-                                int(np.random.uniform(0,30))],dtype=int) #count
-        geom.rock.fDia = np.asarray([[400.0,1200.0],
-                                [200.0,1000.0],
-                                [400.0,1200.0]],dtype=float) #m
-        #FORGE rotated 104 CCW
-        geom.rock.fStr = np.asarray([[351.0*deg,15.0*deg],
-                                [80.0*deg,15.0*deg],
-                                [290.0*deg,15.0*deg,]],dtype=float) #m
-        geom.rock.fDip = np.asarray([[80.0*deg,7.0*deg],
-                                [48.0*deg,7.0*deg,],
-                                [64.0*deg,7.0*deg]],dtype=float) #m
-        #fracture hydraulic parameters
-#        r = np.random.exponential(scale=0.25,size=2)
-#        r[r>1.0] = 1.0
-#        r[r<0] = 0.0
-#        r = r*(0.100/MPa-0.001/MPa)+0.001/MPa   
-#        u1 = -np.min(r)
-#        u2 = -np.max(r)
-#        u3 = 0.5*(u1+u2)
-#        geom.rock.alpha = np.asarray([u1,u3,u2])
-        geom.rock.alpha = np.asarray([-0.028/MPa,-0.028/MPa,-0.028/MPa])
-        
-#        r = np.random.exponential(scale=0.25,size=2)
-#        r[r>1.0] = 1.0
-#        r[r<0] = 0.0
-#        r = r*(0.1-0.001)+0.001   
-#        u1 = np.min(r)
-#        u2 = np.max(r)
-#        u3 = 0.5*(u1+u2)
-#        geom.rock.gamma = np.asarray([u1,u3,u2])
-        geom.rock.gamma = np.asarray([0.01,0.01,0.01])
-        
-        geom.rock.n1 = np.asarray([1.0,1.0,1.0])
-        
-#        r = np.random.exponential(scale=0.25,size=2)
-#        r[r>1.0] = 1.0
-#        r[r<0] = 0.0
-#        r = r*(0.2-0.012)+0.012   
-#        u1 = np.min(r)
-#        u2 = np.max(r)
-#        u3 = 0.5*(u1+u2)
-#        geom.rock.a = np.asarray([u1,u3,u2])
-        geom.rock.a = np.asarray([0.05,0.05,0.05])
-        
-#        u1 = np.random.uniform(0.7,0.9)
-#        u2 = np.random.uniform(0.7,0.9)
-#        u3 = 0.5*(u1+u2)
-#        geom.rock.b = np.asarray([np.min([u1,u2]),u3,np.max([u1,u2])])
-        geom.rock.b = np.asarray([0.8,0.8,0.8])
-        
-#        u1 = np.random.uniform(0.2,1.2)
-#        u2 = np.random.uniform(0.2,1.2)
-#        u3 = 0.5*(u1+u2)
-#        geom.rock.N = np.asarray([np.min([u1,u2]),u3,np.max([u1,u2])])
-        geom.rock.N = np.asarray([0.2,0.5,1.2])
-        
-#        u1 = np.random.uniform(0.00005,0.00015)
-#        u2 = np.random.uniform(0.00005,0.00015)
-#        u3 = 0.5*(u1+u2)
-#        geom.rock.bh = np.asarray([np.min([u1,u2]),u3,np.max([u1,u2])])
-        geom.rock.bh = np.asarray([0.00005,0.0001,0.003])
-        
-        geom.rock.bh_min = 0.00005 #m
-        geom.rock.bh_max = 0.01 #0.02000 #m
-#        geom.rock.bh_bound = np.random.uniform(0.001,0.005)
-        geom.rock.bh_bound = 0.001
-        geom.rock.f_roughness = np.random.uniform(0.7,1.0) #0.8
-        #well parameters
-#        geom.rock.w_count = int(np.random.uniform(1,4)) #2 #wells
-#        geom.rock.w_spacing = np.random.uniform(100.0,800.0) #300.0 #m
-#        geom.rock.w_length = np.random.uniform(800.0,1600.0) #800.0 #m
-#        geom.rock.w_azimuth = geom.rock.s3Azn + np.random.uniform(-10.0,10.0)*deg #rad
-#        geom.rock.w_dip = geom.rock.s3Dip + np.random.uniform(-10.0,10.0)*deg #rad
-#        geom.rock.w_proportion = np.random.uniform(1.2,0.5) #0.8 #m/m
-#        geom.rock.w_phase = np.random.uniform(0.0,360.0)*deg #-90.0*deg #rad
-#        geom.rock.w_toe = np.random.uniform(0.0,0.0)*deg #rad
-#        geom.rock.w_skew = np.random.uniform(-15.0,15.0)*deg #rad
-#        geom.rock.w_intervals = int(np.random.uniform(2,3)) #3 #breaks in well length
-#        geom.rock.ra = 0.0254*np.random.uniform(2.0,7.0) #3.0 #0.0254*3.0 #m
-        geom.rock.w_count = 2 #2 #wells
-        geom.rock.w_spacing = np.random.uniform(100.0,800.0) #300.0 #m
-        geom.rock.w_length = 1500.0 #800.0 #m
-        geom.rock.w_azimuth = geom.rock.s3Azn + np.random.uniform(-15.0,15.0)*deg #rad
-        geom.rock.w_dip = geom.rock.s3Dip + np.random.uniform(-15.0,15.0)*deg #rad
-        geom.rock.w_proportion = 0.8 #m/m
-        geom.rock.w_phase = -90.0*deg #rad
-        geom.rock.w_toe = 0.0*deg #rad
-        geom.rock.w_skew = 0.0*deg #rad
-        geom.rock.w_intervals = int(np.random.uniform(1,3)) #3 #breaks in well length
-        geom.rock.ra = 0.0254*np.random.uniform(3.0,8.0) #3.0 #0.0254*3.0 #m
-        geom.rock.rgh = 80.0
-        #cement properties
-        geom.rock.CemKt = 2.0 # W/m-K
-        geom.rock.CemSv = 2000.0 # kJ/m3-K
-        #thermal-electric power parameters
-        geom.rock.GenEfficiency = 0.85 # kWe/kWt
-        geom.rock.LifeSpan = 20.5*yr #years
-        geom.rock.TimeSteps = 41 #steps
-        geom.rock.p_whp = 1.0*MPa #Pa
-        geom.rock.Tinj = 95.0 #C
-        geom.rock.H_ConvCoef = 3.0 #kW/m2-K
-        geom.rock.dT0 = 10.0 #K
-        geom.rock.dE0 = 500.0 #kJ/m2
-        #water base parameters
-        geom.rock.PoreRho = 980.0 #kg/m3 starting guess
-        geom.rock.Poremu = 0.9*cP #Pa-s
-        geom.rock.Porek = 0.1*mD #m2
-        geom.rock.Frack = 100.0*mD #m2
-        #stimulation parameters
-        if geom.rock.w_intervals == 1:
-            geom.rock.perf = int(np.random.uniform(1,1))
-        else:
-            geom.rock.perf = 1
-        geom.rock.r_perf = 50.0 #m
-        geom.rock.sand = 0.3 #sand ratio in frac fluid
-        geom.rock.leakoff = 0.0 #Carter leakoff
-#        geom.rock.dPp = -1.0*np.random.uniform(1.0,10.0)*MPa #-2.0*MPa #production well pressure drawdown
-        geom.rock.dPp = -2.0*MPa #production well pressure drawdown
-        geom.rock.dPi = 0.1*MPa #!!!
-        geom.rock.stim_limit = 5
-    #    geom.rock.Qinj = 0.01 #m3/s
-        geom.rock.Qstim = 0.08 #m3/s
-        geom.rock.Vstim = 100000.0 #m3
-        geom.rock.bval = 1.0 #Gutenberg-Richter magnitude scaling
-#        u1 = np.random.uniform(20.0,55.0)*deg
-#        u2 = np.random.uniform(20.0,55.0)*deg
-#        u3 = 0.5*(u1+u2)
-#        geom.rock.phi = np.asarray([np.min([u1,u2]),u3,np.max([u1,u2])]) #rad
-        geom.rock.phi = np.asarray([25.0*deg,35.0*deg,45.0*deg]) #rad
-#        u1 = np.random.uniform(5.0,20.0)*MPa
-#        u2 = np.random.uniform(5.0,20.0)*MPa
-#        u3 = 0.5*(u1+u2)
-#        geom.rock.mcc = np.asarray([np.min([u1,u2]),u3,np.max([u1,u2])]) #Pa
-        geom.rock.mcc = np.asarray([5.0,10.0,15.0])*MPa #Pa
-        geom.rock.hfmcc = np.random.uniform(0.0,0.2)*MPa #0.1*MPa
-        geom.rock.hfphi = np.random.uniform(15.0,45.0)*deg #30.0*deg
-        #**********************************
-
-        #recalculate base parameters
-        geom.rock.re_init()
-        
-        #generate domain
-        geom.gen_domain()
-    
-        #generate natural fractures
-        geom.gen_joint_sets()
-        
-        #generate wells
-        wells = []
-        geom.gen_wells(True,wells)
-        
-        #stimulate
-        geom.dyn_stim(Vinj=geom.rock.Vstim,Qinj=geom.rock.Qstim,target=[],
-                      visuals=False,fname='stim')
-        
-        #test multiple randomly selected flow rates
-        #rates = np.random.uniform(0.005,0.08,10)
-        rates = [0.01]
-        for r in rates:
-            #copy base parameter set
-            base = []
-            base = copy.deepcopy(geom)
-            
-            #set rate
-            base.rock.Qinj = r
-            base.rock.re_init()
-        
-            #random identifier (statistically should be unique)
-            pin = np.random.randint(100000000,999999999,1)[0]
-            
-            try:
-#            if True:
-#                #single rate long term flow
-#                base.dyn_flow(target=[],visuals=False,fname='run_%i' %(pin))
-                
-#                #stim then flow
-#                base.stim_and_flow(target=[],visuals=False,fname='run_%i' %(pin))
-                
-                #Solve production
-                base.dyn_stim(Vinj=base.rock.Vinj,Qinj=base.rock.Qinj,target=[],
-                              visuals=False,fname='run_%i' %(pin))
-                
-                #calculate heat transfer
-                base.get_heat(plot=True)
-                plt.savefig('plt_%i.png' %(pin), format='png')
-                plt.close()
-            except:
-                print( 'solver failure!')
-                
-            #show flow model
-            base.build_vtk(fname='fin_%i' %(pin))
-            
-            if False: #3D temperature visual
-                base.build_pts(spacing=50.0,fname='fin_%i' %(pin))
-            
-            #save primary inputs and outputs
-            x = base.save('inputs_results_valid.txt',pin)
-    
-    
-    #show plots
-    pylab.show()
-
-# ****************************************************************************
-#### EGS collab example
-# **************************************************************************** 
-if False: #EGS collab example randomized inputs w/ scaled flow
-    #full randomizer
-    for i in range(0,1):
-        geom = []
-        geom = mesh()
-        
-#        #***** input block randomizer *****
-#        #rock properties
-        geom.rock.size = 150.0 #m
-        geom.rock.ResDepth = np.random.uniform(1250.0,1250.0) #6000.0 # m #!!!
-        geom.rock.ResGradient = np.random.uniform(28.0,32.0) #50.0 #56.70 # C/km; average = 25 C/km
-        geom.rock.ResRho = np.random.uniform(2700.0,2700.0) #2700.0 # kg/m3
-        geom.rock.ResKt = np.random.uniform(2.1,2.8) #2.5 # W/m-K
-        geom.rock.ResSv = np.random.uniform(1900.0,2200.0) #2063.0 # kJ/m3-K
-        geom.rock.AmbTempC = np.random.uniform(20.0,20.0) #25.0 # C
-        geom.rock.AmbPres = 0.101 #Example: 0.01 MPa #Atmospheric: 0.101 # MPa
-        geom.rock.ResE = np.random.uniform(50.0,80.0)*GPa #50.0*GPa
-        geom.rock.Resv = np.random.uniform(0.25,0.30) #0.3
-        geom.rock.Ks3 = np.random.uniform(0.5,0.5) #0.5 #!!!
-        geom.rock.Ks2 = geom.rock.Ks3 + np.random.uniform(0.4,0.6) # 0.75 #!!!
-        geom.rock.s3Azn = 14.4*deg
-        geom.rock.s3AznVar = 5.0*deg
-        geom.rock.s3Dip = 27.0*deg
-        geom.rock.s3DipVar = 5.0*deg
-        #fracture orientation parameters #[i,:] set, [0,0:2] min, max --or-- nom, std
-#        geom.rock.fNum = np.asarray([int(np.random.uniform(0,30)),
-#                                int(np.random.uniform(0,30)),
-#                                int(np.random.uniform(0,30))],dtype=int) #count
-#        r1 = np.random.uniform(50.0,800.0)
-#        r2 = np.random.uniform(50.0,800.0)
-#        r3 = np.random.uniform(50.0,800.0)
-#        geom.rock.fDia = np.asarray([[r1,r1+np.random.uniform(100.0,800.0)],
-#                                [r2,r2+np.random.uniform(100.0,800.0)],
-#                                [r3,r3+np.random.uniform(100.0,800.0)]],dtype=float) #m
-#        geom.rock.fStr = np.asarray([[np.random.uniform(0.0,360.0)*deg,np.random.uniform(0.0,90.0)*deg],
-#                                [np.random.uniform(0.0,360.0)*deg,np.random.uniform(0.0,90.0)*deg],
-#                                [np.random.uniform(0.0,360.0)*deg,np.random.uniform(0.0,90.0)*deg]],dtype=float) #m
-#        geom.rock.fDip = np.asarray([[np.random.uniform(0.0,90.0)*deg,np.random.uniform(0.0,45.0)*deg],
-#                                [np.random.uniform(0.0,90.0)*deg,np.random.uniform(0.0,45.0)*deg],
-#                                [np.random.uniform(0.0,90.0)*deg,np.random.uniform(0.0,45.0)*deg]],dtype=float) #m
-        geom.rock.fNum = np.asarray([int(np.random.uniform(0,30)),
-                                int(np.random.uniform(0,30)),
-                                int(np.random.uniform(0,30))],dtype=int) #count
-        geom.rock.fDia = np.asarray([[10.0,100.0],
-                                [10.0,100.0],
-                                [10.0,100.0]],dtype=float) #m
-        #FORGE rotated 104 CCW
-        geom.rock.fStr = np.asarray([[15.0*deg,7.0*deg],
-                                [260.0*deg,7.0*deg],
-                                [120.0*deg,7.0*deg,]],dtype=float) #m
-        geom.rock.fDip = np.asarray([[35.0*deg,7.0*deg],
-                                [69.0*deg,7.0*deg,],
-                                [35.0*deg,7.0*deg]],dtype=float) #m
-        #fracture hydraulic parameters
-#        r = np.random.exponential(scale=0.25,size=2)
-#        r[r>1.0] = 1.0
-#        r[r<0] = 0.0
-#        r = r*(0.100/MPa-0.001/MPa)+0.001/MPa   
-#        u1 = -np.min(r)
-#        u2 = -np.max(r)
-#        u3 = 0.5*(u1+u2)
-#        geom.rock.alpha = np.asarray([u1,u3,u2])
-        geom.rock.alpha = np.asarray([-0.028/MPa,-0.028/MPa,-0.028/MPa])
-        
-#        r = np.random.exponential(scale=0.25,size=2)
-#        r[r>1.0] = 1.0
-#        r[r<0] = 0.0
-#        r = r*(0.1-0.001)+0.001   
-#        u1 = np.min(r)
-#        u2 = np.max(r)
-#        u3 = 0.5*(u1+u2)
-#        geom.rock.gamma = np.asarray([u1,u3,u2])
-        geom.rock.gamma = np.asarray([0.01,0.01,0.01])
-        
-        geom.rock.n1 = np.asarray([1.0,1.0,1.0])
-        
-#        r = np.random.exponential(scale=0.25,size=2)
-#        r[r>1.0] = 1.0
-#        r[r<0] = 0.0
-#        r = r*(0.2-0.012)+0.012   
-#        u1 = np.min(r)
-#        u2 = np.max(r)
-#        u3 = 0.5*(u1+u2)
-#        geom.rock.a = np.asarray([u1,u3,u2])
-        geom.rock.a = np.asarray([0.05,0.05,0.05])
-        
-#        u1 = np.random.uniform(0.7,0.9)
-#        u2 = np.random.uniform(0.7,0.9)
-#        u3 = 0.5*(u1+u2)
-#        geom.rock.b = np.asarray([np.min([u1,u2]),u3,np.max([u1,u2])])
-        geom.rock.b = np.asarray([0.8,0.8,0.8])
-        
-#        u1 = np.random.uniform(0.2,1.2)
-#        u2 = np.random.uniform(0.2,1.2)
-#        u3 = 0.5*(u1+u2)
-#        geom.rock.N = np.asarray([np.min([u1,u2]),u3,np.max([u1,u2])])
-        geom.rock.N = np.asarray([0.2,0.5,1.2])
-        
-#        u1 = np.random.uniform(0.00005,0.00015)
-#        u2 = np.random.uniform(0.00005,0.00015)
-#        u3 = 0.5*(u1+u2)
-#        geom.rock.bh = np.asarray([np.min([u1,u2]),u3,np.max([u1,u2])])
-        geom.rock.bh = np.asarray([0.00005,0.0001,0.003])
-        
-        geom.rock.bh_min = 0.00005 #m
-        geom.rock.bh_max = 0.01 #0.02000 #m
-#        geom.rock.bh_bound = np.random.uniform(0.001,0.005)
-        geom.rock.bh_bound = 0.002
-        geom.rock.f_roughness = np.random.uniform(0.25,1.0) #0.8
-        #well parameters
-#        geom.rock.w_count = int(np.random.uniform(1,4)) #2 #wells
-#        geom.rock.w_spacing = np.random.uniform(100.0,800.0) #300.0 #m
-#        geom.rock.w_length = np.random.uniform(800.0,1600.0) #800.0 #m
-#        geom.rock.w_azimuth = geom.rock.s3Azn + np.random.uniform(-10.0,10.0)*deg #rad
-#        geom.rock.w_dip = geom.rock.s3Dip + np.random.uniform(-10.0,10.0)*deg #rad
-#        geom.rock.w_proportion = np.random.uniform(1.2,0.5) #0.8 #m/m
-#        geom.rock.w_phase = np.random.uniform(0.0,360.0)*deg #-90.0*deg #rad
-#        geom.rock.w_toe = np.random.uniform(0.0,0.0)*deg #rad
-#        geom.rock.w_skew = np.random.uniform(-15.0,15.0)*deg #rad
-#        geom.rock.w_intervals = int(np.random.uniform(2,3)) #3 #breaks in well length
-#        geom.rock.ra = 0.0254*np.random.uniform(2.0,7.0) #3.0 #0.0254*3.0 #m
-        geom.rock.w_count = 4 #2 #wells
-        geom.rock.w_spacing = 30.0 #np.random.uniform(100.0,800.0) #300.0 #m
-        geom.rock.w_length = 60.0 #1500.0 #800.0 #m
-        geom.rock.w_azimuth = 60.0*deg #geom.rock.s3Azn + np.random.uniform(-15.0,15.0)*deg #rad
-        geom.rock.w_dip = 20.0*deg #geom.rock.s3Dip + np.random.uniform(-15.0,15.0)*deg #rad
-        geom.rock.w_proportion = 0.8 #m/m
-        geom.rock.w_phase = 15.0*deg #rad
-        geom.rock.w_toe = -35.0*deg #rad
-        geom.rock.w_skew = 0.0*deg #rad
-        geom.rock.w_intervals = 2 #int(np.random.uniform(1,3)) #3 #breaks in well length
-        geom.rock.ra = 0.0254*2.25 #0.0254*np.random.uniform(3.0,8.0) #3.0 #0.0254*3.0 #m
-        geom.rock.rgh = 80.0
-        #cement properties
-        geom.rock.CemKt = 2.0 # W/m-K
-        geom.rock.CemSv = 2000.0 # kJ/m3-K
-        #thermal-electric power parameters
-        geom.rock.GenEfficiency = 0.85 # kWe/kWt
-        geom.rock.LifeSpan = 20.5*yr #years
-        geom.rock.TimeSteps = 41 #steps
-        geom.rock.p_whp = 1.0*MPa #Pa
-        geom.rock.Tinj = 10.0 #95.0 #C
-        geom.rock.H_ConvCoef = 3.0 #kW/m2-K
-        geom.rock.dT0 = 10.0 #K
-        geom.rock.dE0 = 500.0 #kJ/m2
-        #water base parameters
-        geom.rock.PoreRho = 980.0 #kg/m3 starting guess
-        geom.rock.Poremu = 0.9*cP #Pa-s
-        geom.rock.Porek = 0.1*mD #m2
-        geom.rock.Frack = 100.0*mD #m2
-        #stimulation parameters
-        if geom.rock.w_intervals == 1:
-            geom.rock.perf = int(np.random.uniform(1,1))
-        else:
-            geom.rock.perf = 1
-        geom.rock.r_perf = 50.0 #m
-        geom.rock.sand = 0.3 #sand ratio in frac fluid
-        geom.rock.leakoff = 0.0 #Carter leakoff
-#        geom.rock.dPp = -1.0*np.random.uniform(1.0,10.0)*MPa #-2.0*MPa #production well pressure drawdown
-        geom.rock.dPp = -2.0*MPa #production well pressure drawdown
-        geom.rock.dPi = 0.1*MPa #!!!
-        geom.rock.stim_limit = 5
-    #    geom.rock.Qinj = 0.01 #m3/s
-        geom.rock.Qstim = 0.01 #0.08 #m3/s
-        geom.rock.Vstim = 1000.0 #100000.0 #m3
-        geom.rock.bval = 1.0 #Gutenberg-Richter magnitude scaling
-#        u1 = np.random.uniform(20.0,55.0)*deg
-#        u2 = np.random.uniform(20.0,55.0)*deg
-#        u3 = 0.5*(u1+u2)
-#        geom.rock.phi = np.asarray([np.min([u1,u2]),u3,np.max([u1,u2])]) #rad
-        geom.rock.phi = np.asarray([25.0*deg,35.0*deg,45.0*deg]) #rad
-#        u1 = np.random.uniform(5.0,20.0)*MPa
-#        u2 = np.random.uniform(5.0,20.0)*MPa
-#        u3 = 0.5*(u1+u2)
-#        geom.rock.mcc = np.asarray([np.min([u1,u2]),u3,np.max([u1,u2])]) #Pa
-        geom.rock.mcc = np.asarray([5.0,10.0,15.0])*MPa #Pa
-        geom.rock.hfmcc = np.random.uniform(0.0,0.2)*MPa #0.1*MPa
-        geom.rock.hfphi = np.random.uniform(15.0,45.0)*deg #30.0*deg
-        #**********************************
-
-        #recalculate base parameters
-        geom.rock.re_init()
-        
-        #generate domain
-        geom.gen_domain()
-    
-        #generate natural fractures
-        geom.gen_joint_sets()
-        
-        #generate wells
-        wells = []
-        geom.gen_wells(True,wells)
-        
-        #stimulate
-        geom.dyn_stim(Vinj=geom.rock.Vstim,Qinj=geom.rock.Qstim,target=[],
-                      visuals=False,fname='stim')
-        
-        #test multiple randomly selected flow rates
-        #rates = np.random.uniform(0.005,0.08,10)
-        rates = [0.007]
-        for r in rates:
-            #copy base parameter set
-            base = []
-            base = copy.deepcopy(geom)
-            
-            #set rate
-            base.rock.Qinj = r
-            base.rock.re_init()
-        
-            #random identifier (statistically should be unique)
-            pin = np.random.randint(100000000,999999999,1)[0]
-            
-            try:
-#            if True:
-#                #single rate long term flow
-#                base.dyn_flow(target=[],visuals=False,fname='run_%i' %(pin))
-                
-#                #stim then flow
-#                base.stim_and_flow(target=[],visuals=False,fname='run_%i' %(pin))
-                
-                #Solve production
-                base.dyn_stim(Vinj=base.rock.Vinj,Qinj=base.rock.Qinj,target=[],
-                              visuals=False,fname='run_%i' %(pin))
-                
-                #calculate heat transfer
-                base.get_heat(plot=True)
-                plt.savefig('plt_%i.png' %(pin), format='png')
-                plt.close()
-            except:
-                print( 'solver failure!')
-                
-            #show flow model
-            base.build_vtk(fname='fin_%i' %(pin))
-            
-            if False: #3D temperature visual
-                base.build_pts(spacing=50.0,fname='fin_%i' %(pin))
-            
-            #save primary inputs and outputs
-            x = base.save('inputs_results_valid.txt',pin)
-    
-    
-    #show plots
-    pylab.show()
-        
         
 # ****************************************************************************
 #### test program (i.e. script development)
