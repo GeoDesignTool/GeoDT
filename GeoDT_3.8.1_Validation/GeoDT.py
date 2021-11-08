@@ -493,7 +493,13 @@ class surf:
         self.bd = self.bh/self.u_N
         self.bd0 = self.bd
         self.vol = (4.0/3.0)*pi*0.25*self.dia**2.0*0.5*self.bd
-            
+    #adjust frictional properties to remove ambient slip critical fractures
+    def check_integrity(self,rock=reservoir()):
+        phi_crit = np.arctan((self.tau-0.1)/(self.sn-rock.BH_P))
+        if self.phi < phi_crit:
+            self.phi = phi_crit
+            self.Pc, self.sn, self.tau = rock.stress.Pc_frac(self.str, self.dip, self.phi, self.mcc)
+            print('alert: a fracture was critically weak and adjusted to phi = %.2f, use less stress anisotropy and or strengthen frictional parameters if appropriate' %(phi_crit))
        
 #line objects
 class line:
@@ -1689,9 +1695,11 @@ class mesh:
         #populate fractures
         for n in range(0,f_num):
             #Fracture parameters
-            dia = np.random.uniform(f_dia[0],f_dia[1])
-            azn = np.random.normal(f_azn[0],f_azn[1])
-            dip = np.random.normal(f_dip[0],f_dip[1])
+            #dia = np.random.uniform(f_dia[0],f_dia[1])
+            logmu = 0.5*(np.log10(f_dia[0])+np.log10(f_dia[1]))
+            dia = lognorm_trunc(1,logmu,logmu,np.log10(f_dia[0]),np.log10(f_dia[1]))
+            azn = np.random.uniform(f_azn[0],f_azn[1])
+            dip = np.random.uniform(f_dip[0],f_dip[1])
             #Build geometry
             x = np.random.uniform(-size,size)
             y = np.random.uniform(-size,size)
@@ -2758,6 +2766,9 @@ class mesh:
         #initial fracture parameters and network volume
         self.re_init()
         for i in range(0,len(self.faces)):
+            #correct for critically weak fractures
+            self.faces[i].check_integrity(self.rock)
+            #time variable properties
             self.faces[i].Pmax = bhp
             self.faces[i].Pcen = bhp
             self.GR_bh(i)
@@ -2774,7 +2785,7 @@ class mesh:
             Vs = []
             Pn = []
         iters = 0
-        maxit = 20
+        maxit = 40
         while 1:
             #loop breaker
             if iters >= maxit:
