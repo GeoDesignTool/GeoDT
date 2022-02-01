@@ -1,44 +1,36 @@
 # GeoDT
+# Developed by Luke P. Frash
 
-Developed by Luke P. Frash
+General:
+This Geothermal Design Tool (GeoDT) is a fast multi-well flow and heat transfer model intended to aid high-level decision making 
+for enhanced geothermal systems - geothermal energy development. This tool: 
+(1)  generates a 3D geometry that includes wells and fractures
+(2)  assigns dimensionally-scaled properties these wells and fractures
+(3)  creates a mesh of 1D pipes and nodes to represent hydraulic connectivity in the 3D well and fracture network
+(4)  solves this 1D network for fluid flow based on user assigned boundary conditions
+(5)  predicts natural fracture and hydraulic fracture stimulation by fluid injection
+(6)  solves this 1D network for time-dependent heat production
+(7)  estimates transient net electrical power production from the network
+(8)  outputs a csv file that summarizes the input and output parameters
+(9)  outputs vtk files for visualizing the system geometry
+(10) provides statistical data visualization example scripts and plots
+* This code is in active development. We appreciate comments and questions that will help to improve this project.
 
-*******************************************************************************************************
-Copyright Notice (OSS License for Distribution):
+File descriptions:
+- GeoDT.py: main program to create and analyze fracture-well system geothermal productivity
+- GeoDTviewer.py: supporting scripts for statistical analysis and plotting of multiple GeoDT runs using the csv file output 
+from GeoDT and an input
+- documentation: information about the input and output variables and the model's methods
+- examples: example scripts that run GeoDT using the input values as specified in the example scripts
+- libs: GeoDT subroutines
+- iapws: courtesy copy of the IAPWS steam table dependency used by GeoDT
 
-© 2021. Triad National Security, LLC. All rights reserved.
-This program was produced under U.S. Government contract 89233218CNA000001 for Los Alamos
-National Laboratory (LANL), which is operated by Triad National Security, LLC for the U.S.
-Department of Energy/National Nuclear Security Administration. All rights in the program are
-reserved by Triad National Security, LLC, and the U.S. Department of Energy/National Nuclear
-Security Administration. The Government is granted for itself and others acting on its behalf a
-nonexclusive, paid-up, irrevocable worldwide license in this material to reproduce, prepare
-derivative works, distribute copies to the public, perform publicly and display publicly, and to permit
-others to do so.
+Instructions for first run (assumes that you are working from install directory):
+(1) Pick an example script from "examples" and copy it to the main directory
+    - 'validation_' files generally specify deterministic geometries and boundary conditions
+    - 'example_' files are generally stochastic multi-run models that focus on EGS design optimization
+(2) Set your python working directory to a location where you want the output files to be created
+(3) Run the example script
+(4) View the result vtk files using a compatible visualization software (e.g., ParaView)
+(5) Inspect the example script and edit as needed to customize to your modeling goals
 
-Copyright Notice (BSD License for Open Source):
-
-This program is open source under the BSD-3 License.
-Redistribution and use in source and binary forms, with or without modification, are permitted
-provided that the following conditions are met:
-1. Redistributions of source code must retain the above copyright notice, this list of conditions and
-the following disclaimer.
- 
-2.Redistributions in binary form must reproduce the above copyright notice, this list of conditions
-and the following disclaimer in the documentation and/or other materials provided with the
-distribution.
- 
-3.Neither the name of the copyright holder nor the names of its contributors may be used to endorse
-or promote products derived from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
-IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
-PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR
-CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
-EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
-PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
-OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
-WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
-OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
-ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-*******************************************************************************************************
