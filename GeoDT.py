@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-print('GeoDT_3.8.1')
+print('GeoDT_3.8.3')
 
 # ****************************************************************************
 # Calculate economic potential of EGS & optimize borehole layout with caging
@@ -667,13 +667,16 @@ class pipes:
     def Dh_limit(self,Q,dP,rho=980.0,g=9.81,mu=0.9*cP,k=0.1*mD):
         for i in range(0,self.num):
             if (int(self.typ[i]) in [typ('injector'),typ('producer'),typ('pipe')]):
-                a_max = (10.7e-5*self.L[i]*rho*g*Q/(dP*self.frict[i]**1.852))**(1.0/4.87)
+                #a_max = (10.7e-5*self.L[i]*rho*g*Q/(dP*self.frict[i]**1.852))**(1.0/4.87)
+                a_max = (10.7e-4*self.L[i]*rho*g*Q/(dP*self.frict[i]**1.852))**(1.0/4.87)
                 self.Dh_max[i] = a_max
             elif (int(self.typ[i]) in [typ('boundary'),typ('fracture'),typ('propped'),typ('choke')]):
-                bh_max = (12.0e-5*mu*Q*self.L[i]/(dP*self.W[i]))**(1.0/3.0)
+                #bh_max = (12.0e-5*mu*Q*self.L[i]/(dP*self.W[i]))**(1.0/3.0)
+                bh_max = (12.0e-4*mu*Q*self.L[i]/(dP*self.W[i]))**(1.0/3.0)
                 self.Dh_max[i] = bh_max
             elif (int(self.typ[i]) in [typ('darcy')]):
-                t_max = 1.0e-5*Q*mu*self.L[i]/(k*self.W[i]*dP)
+                #t_max = 1.0e-5*Q*mu*self.L[i]/(k*self.W[i]*dP)
+                t_max = 1.0e-4*Q*mu*self.L[i]/(k*self.W[i]*dP)
                 self.Dh_max[i] = t_max
             else:
                 print( 'error: undefined type of conduit')
@@ -909,7 +912,7 @@ class mesh:
         #return true if stimulated
         return stim
     
-    def save(self,fname='input_output.txt',pin='',aux=[],printwells=0):
+    def save(self,fname='input_output.txt',pin='',aux=[],printwells=0,time=True):
         out = []
         
         out += [['pin',pin]]
@@ -1066,15 +1069,18 @@ class mesh:
         
         #injection pressure
         # pinj = np.max(np.asarray(self.p_p))/MPa
-        pinj = np.max(self.nodes.p[i])/MPa
+        pinj = np.max(self.nodes.p)/MPa
         out += [['pinj',pinj]]
         
         #injection enthalpy
         T5 = self.rock.Tinj + 273.15 # K
         if pinj > 100.0:
             pinj = 100.0
-        state = therm(T=T5,P=pinj)
-        hinj = state.h
+        try:
+            state = therm(T=T5,P=pinj)
+            hinj = state.h
+        except:
+            hinj = 0.0
         out += [['hinj',hinj]]
         
         #injection specific volume #!!!
@@ -1177,10 +1183,10 @@ class mesh:
             w_T_s = np.zeros((max_w,r.TimeSteps-1),dtype=float)
             w_h_s = np.zeros((max_w,r.TimeSteps-1),dtype=float)
             if len(self.wells) > max_w:
-                print('warning: number of wells exceeds placeholder of 20 so not all values will be printed')
+                print('warning: number of wells exceeds specified output number of %i so not all values will be printed' %(max_w))
             #use array math to store values in fixed-width arrays
             if self.wells: #error handling for case with no wells
-                n = np.min([len(self.wells),20])
+                n = np.min([len(self.wells),max_w])
                 w_q_s[:n] = w_q_s[:n] + w_q[:n]
                 w_m_s[:n] = w_m_s[:n] + w_m[:n]
                 w_T_s[:n] = w_T_s[:n,:] + w_T[:n,:-2]
@@ -1191,12 +1197,13 @@ class mesh:
                 out += [['q%i' %(w),w_q_s[w]]]
                 #mass flow rate, kg/s
                 out += [['m%i' %(w),w_m_s[w]]]
-                for t in range(0,r.TimeSteps-1):
-                    #temperature over time, K
-                    out += [['T%i:%.3f' %(w,self.ts[t]/yr), w_T_s[w,t]]]
-                for t in range(0,r.TimeSteps-1):    
-                    #enthalpy over time, h
-                    out += [['h%i:%.3f' %(w,self.ts[t]/yr), w_h_s[w,t]]]
+                if time:
+                    for t in range(0,r.TimeSteps-1):
+                        #temperature over time, K
+                        out += [['T%i:%.3f' %(w,self.ts[t]/yr), w_T_s[w,t]]]
+                    for t in range(0,r.TimeSteps-1):    
+                        #enthalpy over time, h
+                        out += [['h%i:%.3f' %(w,self.ts[t]/yr), w_h_s[w,t]]]
         
         #output to file
         # out = zip(*out)
@@ -1265,31 +1272,31 @@ class mesh:
         w_col = [w_0,w_1,w_2,w_3,w_4]
         sg.writeVtk(w_obj, w_col, w_lab, vtkFile=(fname + '_wells.vtk'))
         
-        # #******   paint fractures   ******
-        # f_obj = [] #fractures
-        # f_col = [] #fractures colors
-        # f_lab = [] #fractures color labels
-        # f_lab = ['Face_Number','Node_Number','Type','Sn_MPa','Pc_MPa','Tau_MPa']
-        # f_0 = []
-        # f_1 = []
-        # f_2 = []
-        # f_3 = []
-        # f_4 = []
-        # f_5 = []
-        # #nodex = np.asarray(self.nodes)
-        # for i in range(6,len(self.faces)): #skip boundary node at np.inf
-        #     #add colors
-        #     f_0 += [i]
-        #     f_1 += [self.faces[i].ci]
-        #     f_2 += [self.faces[i].typ]
-        #     f_3 += [self.faces[i].sn/MPa]
-        #     f_4 += [self.faces[i].Pc/MPa]
-        #     f_5 += [self.faces[i].tau/MPa]
-        #     #add geometry
-        #     f_obj += [HF(r=0.5*self.faces[i].dia, x0=self.faces[i].c0, strikeRad=self.faces[i].str, dipRad=self.faces[i].dip, h=0.01*r)]
-        # #vtk file
-        # f_col = [f_0,f_1,f_2,f_3,f_4,f_5]
-        # sg.writeVtk(f_obj, f_col, f_lab, vtkFile=(fname + '_fracs.vtk'))
+        #******   paint fractures   ******
+        f_obj = [] #fractures
+        f_col = [] #fractures colors
+        f_lab = [] #fractures color labels
+        f_lab = ['Face_Number','Node_Number','Type','Sn_MPa','Pc_MPa','Tau_MPa']
+        f_0 = []
+        f_1 = []
+        f_2 = []
+        f_3 = []
+        f_4 = []
+        f_5 = []
+        #nodex = np.asarray(self.nodes)
+        for i in range(6,len(self.faces)): #skip boundary node at np.inf
+            #add colors
+            f_0 += [i]
+            f_1 += [self.faces[i].ci]
+            f_2 += [self.faces[i].typ]
+            f_3 += [self.faces[i].sn/MPa]
+            f_4 += [self.faces[i].Pc/MPa]
+            f_5 += [self.faces[i].tau/MPa]
+            #add geometry
+            f_obj += [HF(r=0.5*self.faces[i].dia, x0=self.faces[i].c0, strikeRad=self.faces[i].str, dipRad=self.faces[i].dip, h=0.01*r)]
+        #vtk file
+        f_col = [f_0,f_1,f_2,f_3,f_4,f_5]
+        sg.writeVtk(f_obj, f_col, f_lab, vtkFile=(fname + '_fracs.vtk'))
         
         #******   paint flowing fractures   ******
         q_obj = [] #fractures
@@ -1365,6 +1372,10 @@ class mesh:
         p_5 = []
         p_6 = []
         p_7 = []
+        qs = np.asarray(self.q)
+        if not qs.any():
+            qs = np.zeros(self.pipes.num)
+        qs = np.abs(qs)
         for i in range(0,self.pipes.num):
             #add geometry
             x0 = self.nodes.all[self.pipes.n0[i]]
@@ -1375,7 +1386,7 @@ class mesh:
                 #add colors
                 p_0 += [i]
                 p_1 += [self.pipes.typ[i]]
-                p_2 += [abs(self.q[i])]
+                p_2 += [qs[i]]
                 p_3 += [self.pipes.W[i]]
                 p_4 += [self.pipes.L[i]]
                 p_5 += [self.pipes.Dh[i]*1000]
@@ -2368,7 +2379,7 @@ class mesh:
         hlo = -101.4/(rho*g)
         
         #convergence
-        goal = 0.0005
+        goal = 0.0001
         
         #dimension limiters for flow solver stability
         self.pipes.Dh_limit(Qnom,goal*rho*g,rho,g,mu,self.rock.Frack)
@@ -2407,25 +2418,26 @@ class mesh:
     
         #iterative Newton-Rhapson solution to solve flow
         iters = 0
-        max_iters = 100
+        max_iters = 50
         z = h
+        #add jitters
+        h += 2.0*goal*np.random.rand(N)-goal
         while 1:
             #loop breaker
             iters += 1
             if iters > max_iters:
-                print( '-> Flow solver halted after %i iterations' %(iters-1))
+                print( '-> Flow solver halted with error of <%.2e m head after %i iterations' %(np.max(np.abs(z)),iters-1))
                 break
             elif np.max(np.abs(z)) < goal: #np.max(np.abs(z/(h+z))) < goal:
-                print( '-> Flow solver converged to <%.2f%% of max head using %i iterations' %(goal*100.0,iters-1))
+                print( '-> Flow solver converged to <%.2e m head using %i iterations' %(goal,iters-1))
                 break
+            
+            #!!! jitters was here
 
             #re-initialize working variables
             F = np.zeros(N)
             F += q
             D = np.zeros((N,N))
-            
-            #add jitters
-            h += 0.001*np.random.rand(N)
             
             #build matrix equations
             for i in range(0,Np):
@@ -2464,7 +2476,7 @@ class mesh:
             #update pressures
             for i in range(0,len(H)):
                 z = np.insert(z,H[i][0],0,axis=0)
-            h = h - 0.7*z #0.7 scaling factor seems to give faster convergence by reducing solver overshoot
+            h = h - 0.9*z #0.7 scaling factor seems to give faster convergence by reducing solver overshoot
             
             #apply physical limits
             h[h > hup] = hup
@@ -3267,6 +3279,7 @@ class mesh:
             self.GR_bh(i,fix=True)
         
         #***** final pressure calculation to set facture apertures
+        print( '{Pressure boundary conditions with stimulation disabled -> get fractrue apertures}')
         #fixed pressure solve
         q_well = np.full(len(self.wells),None)
         p_well = np.full(len(self.wells),None)
@@ -3294,6 +3307,7 @@ class mesh:
             self.GR_bh(i,fix=True)
         
         #***** flow rate solve for heat transfer solution
+        print( '{Flow boundary conditions with stimulation disabled -> get flow in network}')
         q_well = np.full(len(self.wells),None)
         p_well = np.full(len(self.wells),None)
         #set injection boundary conditions using flow values, unless stable flow was never acheived (e.g., hydrofrac only)
