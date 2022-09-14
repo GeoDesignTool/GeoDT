@@ -724,10 +724,14 @@ class mesh:
         self.b_m = [] #boundary mass flow
         self.b_E = [] #boundary energy
         self.i_E = [] #injection energy
+        self.i_mm = [] #mixed injection mass flow rate
         self.p_mm = [] #mixed produced mass flow rate
         self.p_hm = [] #mixed produced enthalpy
         #power solver
-        self.Pout = [] #rankine power output
+        self.Fout = [] #flash rankine power out
+        self.Bout = [] #binary isobutane power out
+        self.Qout = [] #pumping power out
+        self.Pout = [] #net power out
         self.dhout = [] #heat extraction
         #validation stuff
         self.v_Rs = []
@@ -736,6 +740,8 @@ class mesh:
         self.v_ws = []
         self.v_Vs = []
         self.v_Pn = []
+        #economics
+        self.NPV = 0.0
 
 #    # Static per-fracture hydraulic resistance terms using method of Luke P. Frash; [lower,nominal,upper]
 #    # .... also calculates the stress states on the fractutres
@@ -846,7 +852,7 @@ class mesh:
             d1 = d0 + ds
             bd1 = self.faces[f_id].u_a * (d1 ** self.faces[f_id].u_b)
             dbd = bd1- bd0
-            #record stimulation magnitude
+            #record stimulation magnitude and correct for seismic overestimation
             self.faces[f_id].Mws += [mw]
             #add to zero-stress dilatant aperture
             bd0 = self.faces[f_id].bd0 + dbd
@@ -1113,6 +1119,9 @@ class mesh:
                     nfstim += 1
         out += [['hfstim',hfstim]]
         out += [['nfstim',nfstim]]
+
+        #injection mass flow rate
+        out += [['minj',self.i_mm]]
         
         #production mass flow rate
         out += [['mpro',self.p_mm]]
@@ -1121,7 +1130,7 @@ class mesh:
         for t in range(0,len(self.ts)-1):
             out += [['hpro:%.3f' %(self.ts[t]/yr),self.p_hm[t]]]
         
-        #power
+        #flash power
         Pout = []
         if self.Pout == []:
             Pout = np.full(len(self.ts),np.nan)
@@ -1129,6 +1138,15 @@ class mesh:
             Pout = self.Pout
         for t in range(0,len(self.ts)-1):
             out += [['Pout:%.3f' %(self.ts[t]/yr),Pout[t]]]
+
+        #binary power
+        Bout = []
+        if self.Bout == []:
+            Bout = np.full(len(self.ts),np.nan)
+        else:
+            Bout = self.Bout
+        for t in range(0,len(self.ts)-1):
+            out += [['Bout:%.3f' %(self.ts[t]/yr),Bout[t]]]
             
         #thermal energy extraction
         dhout = []
@@ -1272,31 +1290,31 @@ class mesh:
         w_col = [w_0,w_1,w_2,w_3,w_4]
         sg.writeVtk(w_obj, w_col, w_lab, vtkFile=(fname + '_wells.vtk'))
         
-        #******   paint fractures   ******
-        f_obj = [] #fractures
-        f_col = [] #fractures colors
-        f_lab = [] #fractures color labels
-        f_lab = ['Face_Number','Node_Number','Type','Sn_MPa','Pc_MPa','Tau_MPa']
-        f_0 = []
-        f_1 = []
-        f_2 = []
-        f_3 = []
-        f_4 = []
-        f_5 = []
-        #nodex = np.asarray(self.nodes)
-        for i in range(6,len(self.faces)): #skip boundary node at np.inf
-            #add colors
-            f_0 += [i]
-            f_1 += [self.faces[i].ci]
-            f_2 += [self.faces[i].typ]
-            f_3 += [self.faces[i].sn/MPa]
-            f_4 += [self.faces[i].Pc/MPa]
-            f_5 += [self.faces[i].tau/MPa]
-            #add geometry
-            f_obj += [HF(r=0.5*self.faces[i].dia, x0=self.faces[i].c0, strikeRad=self.faces[i].str, dipRad=self.faces[i].dip, h=0.01*r)]
-        #vtk file
-        f_col = [f_0,f_1,f_2,f_3,f_4,f_5]
-        sg.writeVtk(f_obj, f_col, f_lab, vtkFile=(fname + '_fracs.vtk'))
+        # #******   paint fractures   ******
+        # f_obj = [] #fractures
+        # f_col = [] #fractures colors
+        # f_lab = [] #fractures color labels
+        # f_lab = ['Face_Number','Node_Number','Type','Sn_MPa','Pc_MPa','Tau_MPa']
+        # f_0 = []
+        # f_1 = []
+        # f_2 = []
+        # f_3 = []
+        # f_4 = []
+        # f_5 = []
+        # #nodex = np.asarray(self.nodes)
+        # for i in range(6,len(self.faces)): #skip boundary node at np.inf
+        #     #add colors
+        #     f_0 += [i]
+        #     f_1 += [self.faces[i].ci]
+        #     f_2 += [self.faces[i].typ]
+        #     f_3 += [self.faces[i].sn/MPa]
+        #     f_4 += [self.faces[i].Pc/MPa]
+        #     f_5 += [self.faces[i].tau/MPa]
+        #     #add geometry
+        #     f_obj += [HF(r=0.5*self.faces[i].dia, x0=self.faces[i].c0, strikeRad=self.faces[i].str, dipRad=self.faces[i].dip, h=0.01*r)]
+        # #vtk file
+        # f_col = [f_0,f_1,f_2,f_3,f_4,f_5]
+        # sg.writeVtk(f_obj, f_col, f_lab, vtkFile=(fname + '_fracs.vtk'))
         
         #******   paint flowing fractures   ******
         q_obj = [] #fractures
@@ -2227,7 +2245,14 @@ class mesh:
     # ************************************************************************
     def get_power(self,detail=False):
         #initialization
-        self.Pout = []        
+        self.Fout = []
+        self.Bout = []
+        self.Qout = []
+        self.Pout = []
+        Flash_Power = []
+        Binary_Power = []
+        Pump_Power = []
+        Net_Power = []
         #truncate pressures when superciritical
         i_p = np.max([list(self.i_p) + list(self.p_p)])/MPa
         if i_p > 100.0:
@@ -2297,21 +2322,61 @@ class mesh:
             # Turbine Work
             w3s = h2s - h3s # kJ/kg
             # Pump Work
-            w5s = v5*(np.max(list(self.i_p)+list(self.p_p))/MPa-P4s)*10**3 # kJ/kg
-            w5l = v5*(np.max(list(self.i_p)+list(self.p_p))/MPa-P2l)*10**3 # kJ/kg
-            # Net Work
-            wNs = w3s - (w5s + w5l)
-            # Energy production
-            Pout = 0.0 #kW
-            # If sufficient steam quality
-            if x2 > 0:
-                mt = -self.p_mm
-                ms = mt*x2
-                ml = mt*(1.0-x2)
-                Vt = (v5*mt)*(1000*60) # L/min
-                Pout = ms*wNs*self.rock.GenEfficiency #kW
-            self.Pout += [Pout]
-
+            w5s = v5*(P5-P4s)*10**3 # kJ/kg
+            w5l = v5*(P5-P2l)*10**3 # kJ/kg
+            #efficiency shorthand
+            effic = self.rock.GenEfficiency
+            # Mass flow rates
+            mt = -self.p_mm
+            ms = mt*x2
+            ml = mt*(1.0-x2)
+            mi = self.i_mm
+            Vt = (v5*mt)*(1000*60) # L/min
+            # Pumping power
+            Pump = 0.0
+            if mi > mt:
+                Pump = -1.0*(ms*w5s + ml*w5l)/effic + -1.0*(mi-mt)*w5s/effic #kW
+            elif mi < ml:
+                Pump = -1.0*(mi*w5l)/effic #kW
+            else:
+                Pump = -1.0*((mi-ml)*w5s + ml*w5l)/effic #kW  
+            # Flash cycle power
+            Flash = 0.0 #kW
+            Flash = ms*np.max([0.0, w3s])*effic #kW
+            # Binary cycle power
+            Binary = 0.0
+            # Outlet thermal state
+            TBo = np.max([T5,51.85+273.15])
+            PBo = np.min([P3s,P2])
+            state = therm(T=TBo,P=PBo)
+            PBo = state.P # MPa
+            hBo = state.h #kJ/kg
+            TBo = state.T # K
+            # Binary Cycle Inlet from Turbine
+            TBis = T3s
+            PBis = P3s
+            hBis = h3s
+            # Binary Cycle Inlet from Brine
+            TBil = np.min([T2l,T2])
+            PBil = P2l
+            hBil = np.min([h2l,h2])
+            # Binary thermal-electric efficiency
+            nBs = np.max([0.0, 0.0899*TBis - 25.95])/100.0
+            nBl = np.max([0.0, 0.0899*TBil - 25.95])/100.0
+            Binary = (ms*nBs*np.max([0.0, hBis-hBo]) + ml*nBl*np.max([0.0, hBil-hBo]))*effic #kW, power produced from binary cycle
+            # Net power
+            Net = 0.0
+            Net = Flash + Binary + Pump
+            # Record results
+            Flash_Power += [Flash]
+            Binary_Power += [Binary]
+            Pump_Power += [Pump]
+            Net_Power += [Net]
+        #record results
+        self.Fout = np.asarray(Flash_Power)
+        self.Bout = np.asarray(Binary_Power)
+        self.Qout = np.asarray(Pump_Power)
+        self.Pout = np.asarray(Net_Power)
         #print( details)
         if detail:
             print( '\n*** Rankine Cycle Thermal State Values ***')
@@ -2322,14 +2387,85 @@ class mesh:
             print( ("Brine (2l): T= %.2f; P= %.2f; h= %.2f, s= %.4f, x= %.4f, v= %.6f" %(T2l,P2l,h2l,s2l,x2l,v2l)))
             print( ("Exhau (3s): T= %.2f; P= %.2f; h= %.2f, s= %.4f, x= %.4f, v= %.6f" %(T3s,P3s,h3s,s3s,x3s,v3s)))
             print( ("Conde (4s): T= %.2f; P= %.2f; h= %.2f, s= %.4f, x= %.4f, v= %.6f" %(T4s,P4s,h4s,s4s,x4s,v4s)))
-            print( ("Turbine Specific Work = %.2f kJ/kg" %(w3s)))
-            print( ("Turbine Pump Work = %.2f kJ/kg \nBrine Pump Work = %.2f kJ/kg" %(w5s,w5l)))
-            print( ("Net Specifc Work Turbine = %.2f kJ/kg" %(wNs)))
+            print( '*** Binary Cycle Thermal State Values ***')
+            print( ("Steam: Ti= %.2f; Pi= %.2f; hi= %.2f -> To= %.2f, Po= %.2f, ho= %.2f, n =%.3f" %(TBis,PBis,hBis,TBo,PBo,hBo,nBs)))
+            print( ("Brine: Ti= %.2f; Pi= %.2f; hi= %.2f -> To= %.2f, Po= %.2f, ho= %.2f, n =%.3f" %(TBil,PBil,hBil,TBo,PBo,hBo,nBl)))
+            print( '*** Power Output Estimation ***')            
             print( "Turbine Flow Rate = %.2f kg/s" %(ms))
             print( "Bypass Flow Rate = %.2f kg/s" %(ml))
-            print( "Well Flow Rate = %.2f kg/s" %(mt))
-            print( "Well Flow Rate = %.2f L/min" %(Vt))
-            print( "Power at %.2f yr = %.2f kW" %(self.ts[-1]/yr,Pout))
+            print( "Well Flow Rate = %.2f kg/s = %.2f L/min" %(mt, Vt))
+            print( "Flash Power at %.2f kW" %(Flash))
+            print( "Binary Power at %.2f kW" %(Binary))
+            print( "Pumping Power at %.2f kW" %(Pump))
+            print( "Net Power at %.2f kW" %(Net))
+
+        #     # Energy production
+        #     Pout = 0.0 #kW
+        #     # If sufficient steam quality
+        #     # if x2 > 0:
+        #     #     mt = -self.p_mm
+        #     #     ms = mt*x2
+        #     #     ml = mt*(1.0-x2)
+        #     #     Vt = (v5*mt)*(1000*60) # L/min
+        #     #     Pout = ms*wNs*self.rock.GenEfficiency #kW
+        #     mt = -self.p_mm
+        #     ms = mt*x2
+        #     ml = mt*(1.0-x2)
+        #     mi = self.i_mm
+        #     Vt = (v5*mt)*(1000*60) # L/min
+        #     Pout = ms*np.max([0.0, w3s])*self.rock.GenEfficiency #kW, power from flash turbine
+        #     Pout += -1.0*(ms*w5s + ml*w5l)/self.rock.GenEfficiency #kW, power consumed by recirculation pumps
+        #     Pout += -1.0*(mi-mt)*w5s/self.rock.GenEfficiency #kW, power consumed by makeup water pumps
+        #     self.Pout += [Pout]
+            
+        #     # Binary Cycle Outlet
+        #     TBo = np.max([T5,51.85+273.15])
+        #     PBo = np.min([P3s,P2])
+        #     state = therm(T=TBo,P=PBo)
+        #     PBo = state.P # MPa
+        #     hBo = state.h #kJ/kg
+        #     TBo = state.T # K
+        #     # Binary Cycle Inlet from Turbine
+        #     TBis = T3s
+        #     PBis = P3s
+        #     hBis = h3s
+        #     # Binary Cycle Inlet from Brine
+        #     TBil = T2l
+        #     PBil = P2l
+        #     hBil = h2l
+        #     # Binary thermal-electric efficiency
+        #     nBs = np.max([0.0, 0.0899*TBis - 25.95])/100.0
+        #     nBl = np.max([0.0, 0.0899*TBil - 25.95])/100.0
+        #     Bout = 0.0 #kW
+        #     Bout = ms*np.max([0.0, w3s])*self.rock.GenEfficiency #kW, power from flash turbine
+        #     Bout += (ms*nBs*np.max([0.0, hBis-hBo]) + ml*nBl*np.max([0.0, hBil-hBo]))*self.rock.GenEfficiency #kW, power produced from binary cycle
+        #     Bout += -1.0*(ms*w5s + ml*w5l)/self.rock.GenEfficiency #kW, power consumed by recirculation pumps
+        #     Bout += -1.0*(mi-mt)*w5s/self.rock.GenEfficiency #kW, power consumed by makeup water pumps
+        #     self.Bout += [Bout]
+
+        # #print( details)
+        # if detail:
+        #     print( '\n*** Rankine Cycle Thermal State Values ***')
+        #     print( ("Inject (5): T= %.2f; P= %.2f; h= %.2f, s= %.4f, x= %.4f, v= %.6f" %(T5,P5,h5,s5,x5,v5)))
+        #     print( ("Reserv (r,1): T= %.2f; P= %.2f; h= %.2f, s= %.4f, x= %.4f, v= %.6f" %(Tr,Pr,hr,sr,xr,vr)))
+        #     print( ("Produc (2): T= %.2f; P= %.2f; h= %.2f, s= %.4f, x= %.4f, v= %.6f" %(T2,P2,h2,s2,x2,v2)))
+        #     print( ("Turbi (2s): T= %.2f; P= %.2f; h= %.2f, s= %.4f, x= %.4f, v= %.6f" %(T2s,P2s,h2s,s2s,x2s,v2s)))
+        #     print( ("Brine (2l): T= %.2f; P= %.2f; h= %.2f, s= %.4f, x= %.4f, v= %.6f" %(T2l,P2l,h2l,s2l,x2l,v2l)))
+        #     print( ("Exhau (3s): T= %.2f; P= %.2f; h= %.2f, s= %.4f, x= %.4f, v= %.6f" %(T3s,P3s,h3s,s3s,x3s,v3s)))
+        #     print( ("Conde (4s): T= %.2f; P= %.2f; h= %.2f, s= %.4f, x= %.4f, v= %.6f" %(T4s,P4s,h4s,s4s,x4s,v4s)))
+        #     print( '*** Binary Cycle Thermal State Values ***')
+        #     print( ("Steam: Ti= %.2f; Pi= %.2f; hi= %.2f -> To= %.2f, Po= %.2f, ho= %.2f, n =%.3f" %(TBis,PBis,hBis,TBo,PBo,hBo,nBs)))
+        #     print( ("Brine: Ti= %.2f; Pi= %.2f; hi= %.2f -> To= %.2f, Po= %.2f, ho= %.2f, n =%.3f" %(TBil,PBil,hBil,TBo,PBo,hBo,nBl)))
+        #     print( '*** Power Output Estimation ***')            
+        #     print( ("Turbine Specific Work = %.2f kJ/kg" %(w3s)))
+        #     print( ("Turbine Pump Work = %.2f kJ/kg \nBrine Pump Work = %.2f kJ/kg" %(w5s,w5l)))
+        #     # print( ("Net Specifc Work Turbine = %.2f kJ/kg" %(wNs)))
+        #     print( "Turbine Flow Rate = %.2f kg/s" %(ms))
+        #     print( "Bypass Flow Rate = %.2f kg/s" %(ml))
+        #     print( "Well Flow Rate = %.2f kg/s" %(mt))
+        #     print( "Well Flow Rate = %.2f L/min" %(Vt))
+        #     print( "Flash Power at %.2f yr = %.2f kW" %(self.ts[-1]/yr,Pout))
+        #     print( "Binary Power at %.2f yr = %.2f kW" %(self.ts[-1]/yr,Bout))
             
     # ************************************************************************
     # flow network model
@@ -2534,14 +2670,17 @@ class mesh:
         self.b_q = b_q
     
     # ************************************************************************
-    # heat transfer model - mod 1-28-2021
+    # heat transfer model 
+    # - mod 1-28-2021: correct errors
+    # - mod 9-13-2022: reduce overshoot in initial timesteps
     # ************************************************************************
     def get_heat(self,plot=True,
                  t_n = -1, #steps
                  t_f = -1.0*yr, #s
                  H = -1.0, #kW/m2-K
                  dT0 = -666.6, #K
-                 dE0 = -666.6): #kJ/m2
+                 dE0 = -666.6, #kJ/m2
+                 detail=False):
         print( '*** heat flow module ***')
         #****** default parameters ******
         if t_n < 0:
@@ -2613,8 +2752,9 @@ class mesh:
         Np = self.pipes.num
         Tb = self.Tb
 #        Y = self.pipes
-        #initial guess for temperatures
-        Tn = np.ones(N) * Tr #K
+        #initial guess for temperatures #!!!
+        Tn = np.ones(N) * (Tr-dT0) #K 
+        #Tn = np.ones(N) * Tr #K
         #node pressures from flow solution
         Pn = np.asarray(self.nodes.p)/MPa #MPa
         #truncate high pressures for solver stability (supercritical states)
@@ -2661,47 +2801,19 @@ class mesh:
         for e in self.Q:
             key += [e[0]]
             key += [e[0]+1]
-        
-        #initial rock energy withdraw and heat transfer rates (to capture early cooling from drilling and flow tests, this also stabilizes the early time solution)
-        for p in range(0,Np):
-            #working variables
-            #u = self.pipes.fID[p]
-            dT = dT0
-            #@@@@@ override initial timestep energy to impose stability
-            dT = abs(Tr-T5)
-            a = 1.0/(self.rock.ResSv*dT*self.rock.ResKt*10**-3)
-            b = 1.0/self.rock.H_ConvCoef
-            c = -2.0*dT*dt
-            dE0 = (-b + (b**2.0 - 4.0*a*c)**0.5)/(2.0*a)
-            dE0 = dE0 * 1.0
-            self.rock.dE0 = dE0
-            
-            if (int(self.pipes.typ[p]) in [typ('injector'),typ('producer'),typ('pipe')]): #pipe, radial heat flow
-                #initial rock energy withdraw
-                Et[0,p] = dE0*2.0*pi*Rir*Lp[p] #kJ
-                #initial rock thermal radius
-                R0[p] = np.exp(ERm*(np.log(np.abs(Et[0,p]/(Lp[p]*dT))))+ERb) + Rir #m
-                #initial rock energy transfer rates
-                Qt[0,p] = Lp[p]/(1.0/(2.0*pi*Ris*H) + np.log(R0[p]/Rir)/(2.0*pi*ResKt*10**-3) + np.log(Rir/Ric)/(2.0*pi*CemKt*10**-3)) #kJ/K-s
-            elif (int(self.pipes.typ[p]) in [typ('boundary'),typ('fracture'),typ('propped'),typ('darcy'),typ('choke')]): #fracture, plate heat flow
-                #initial rock energy withdraw
-                Et[0,p] = dE0*self.pipes.W[p]*Lp[p] #kJ
-                #initial rock thermal radius
-                R0[p] = Et[0,p]/(ResSv*self.pipes.W[p]*Lp[p]*dT) #m
-                #initial rock energy transfer rates
-                Qt[0,p] = (2.0*self.pipes.W[p]*Lp[p])/(1.0/(H) + R0[p]/(ResKt*10**-3)) #kJ/K-s
-            else:
-                print( 'error: segment type %s not identified' %(typ(int(self.pipes.typ[p]))))
     
         #convergence criteria
         goal = 0.5
         
         #iterate over time
-        for t in range(0,len(ts)-1):
+        for t in range(0,len(ts)-1): #!!! add self-estimation of dE0 for stabilization
             #calculate nodal temperatures by pipe flow and nodal mixing
             iters = 0
-            max_iters = 30
             err = np.ones(N)*goal*10
+            E0_update_intervals = 10
+            max_iters = 30*E0_update_intervals
+            
+            #iterate for temperature stability
             while 1:
                 #calculate nodal fluid enthalpy #@@@ requires consideration of sensible heating (0<X<1) if not supercritical
                 hn = hTP[0]*Tn**3.0 + hTP[1]*Tn**2.0 + hTP[2]*Tn**1.0 + hTP[3]
@@ -2727,20 +2839,46 @@ class mesh:
                 mi = np.zeros(N,dtype=float)
                 for p in range(0,Np):
                     #working variables
-                    #u = self.pipes.fID[p]
                     n0 = self.pipes.n0[p]
-                    n1 = self.pipes.n1[p]                    
+                    n1 = self.pipes.n1[p]                      
                     
+                    #get overshoot limit for timestep for each pipe #!!! edit 9-13-2022 start
+                    if (iters-1)%E0_update_intervals == 0:
+                        dT = 0.5*(Tn[n1] + Tn[n0]) - Tr
+                        dT = np.max([np.abs(dT0),np.abs(dT)])
+                        a = 1.0/(self.rock.ResSv*np.abs(dT)*self.rock.ResKt*10**-3)
+                        b = 1.0/self.rock.H_ConvCoef
+                        c = -2.0*np.abs(dT)*dt
+                        dE0 = (-b + (b**2.0 - 4.0*a*c)**0.5)/(2.0*a)
+                        #get extracted energy - Et, thermal radius - R0, heat flow rate - Qt
+                        if (int(self.pipes.typ[p]) in [typ('injector'),typ('producer'),typ('pipe')]): #pipe, radial heat flow
+                            #energy withdraw
+                            E0p = dE0*2.0*pi*Rir*Lp[p] #kJ
+                            Esp = Et[t,p]
+                            Etp = np.max([E0p,Esp])
+                            #initial rock thermal radius
+                            R0[p] = np.exp(ERm*(np.log(np.abs(Etp/(Lp[p]*dT))))+ERb) + Rir #m
+                            #initial rock energy transfer rates
+                            Qt[t,p] = Lp[p]/(1.0/(2.0*pi*Ris*H) + np.log(R0[p]/Rir)/(2.0*pi*ResKt*10**-3) + np.log(Rir/Ric)/(2.0*pi*CemKt*10**-3)) #kJ/K-s
+                        elif (int(self.pipes.typ[p]) in [typ('boundary'),typ('fracture'),typ('propped'),typ('darcy'),typ('choke')]): #fracture, plate heat flow
+                            #rock energy withdraw
+                            E0p = dE0*self.pipes.W[p]*Lp[p] #kJ
+                            Esp = Et[t,p]
+                            Etp = np.max([E0p,Esp])
+                            #rock thermal radius
+                            R0[p] = Etp/(ResSv*self.pipes.W[p]*Lp[p]*dT) #m
+                            #rock energy transfer rates
+                            Qt[t,p] = (2.0*self.pipes.W[p]*Lp[p])/(1.0/(H) + R0[p]/(ResKt*10**-3)) #kJ/K-s
+                        else:
+                            print( 'error: segment type %s not identified' %(typ(int(self.pipes.typ[p])))) #!!! edit 9-13-2022 end
+
                     #equilibrium enthalpy
-#                    heq0 = therm(T=Tr,P=Pn[n0]).h
-#                    heq1 = therm(T=Tr,P=Pn[n1]).h
                     heq0 = hTP[0]*Tr**3.0 + hTP[1]*Tr**2.0 + hTP[2]*Tr**1.0 + hTP[3]
                     heq1 = heq0
                     
                     #working variables
                     Kp = 0.0
                     Qp = 0.0
-#                    dh = 0.0
 
                     #positive flow
                     if ms[p] > 0:
@@ -2932,6 +3070,14 @@ class mesh:
             i = int(i)
             i_ET += np.sum(w_m[i]*w_h[i]) #kJ/s
         i_ET = i_ET*dt/t_f #/len(i_h[w])
+
+        #mixed injection mass flow rate
+        i_mm = []
+        i_mm = 0.0
+        for i in iInj:
+            i = int(i)
+            i_mm += w_m[i]
+        self.i_mm = i_mm #mixed produced mass flow rate
         
         #total boundary energy flow
         b_ET_out = 0.0
@@ -2974,7 +3120,7 @@ class mesh:
         self.b_m = b_m
         
         #calculate power output
-        self.get_power(detail=False)
+        self.get_power(detail=detail) #!!!
         
         #thermal energy extraction
         dht = np.zeros(len(ts),dtype=float)
@@ -2993,27 +3139,30 @@ class mesh:
                 ax1.plot(ts[:-1]/yr,w_h[i][:-1],linewidth=1.5)
             ax1.set_xlabel('Time (yr)')
             ax1.set_ylabel('Production Enthalpy (kJ/kg)')
-            ax1.set_ylim(bottom=0.0)
-            ax1 = fig.add_subplot(222)
-            ax1.plot(ts[:-1]/yr,self.Pout[:],linewidth=1.5,color='red')
-            ax1.set_xlabel('Time (yr)')
-            ax1.set_ylabel('Electrical Power Output (kW)')
-            ax1.set_ylim(bottom=0.0)
-            ax1 = fig.add_subplot(223)
+            # ax1.set_ylim(bottom=0.0)
+            ax2 = fig.add_subplot(222)
+            ax2.plot(ts[:-1]/yr,self.Fout[:],linewidth=1.0,color='red')
+            ax2.plot(ts[:-1]/yr,self.Bout[:],linewidth=1.0,color='blue')
+            ax2.plot(ts[:-1]/yr,self.Qout[:],linewidth=1.0,color='cyan')
+            ax2.plot(ts[:-1]/yr,self.Pout[:],linewidth=1.5,color='black')
+            ax2.set_xlabel('Time (yr)')
+            ax2.set_ylabel('Fla-R, Bin-B, Pum-C, Net-K (kWe)')
+            # ax2.set_ylim(bottom=0.0)
+            ax3 = fig.add_subplot(223)
             for i in iPro:
                 i = int(i)
-                ax1.plot(ts[:-1]/yr,w_T[i][:-1],linewidth=1.5)
-            ax1.set_xlabel('Time (yr)')
-            ax1.set_ylabel('Production Temperature (K)')
-            ax1.set_ylim(bottom=273.0)
-#            ax1.plot(ts/yr,np.sum(Et,axis=1),linewidth=0.5,color='black')
-#            ax1.set_xlabel('Time (yr)')
-#            ax1.set_ylabel('Rock Energy (kJ)')
-            ax1 = fig.add_subplot(224)
-            ax1.plot(ts[:-1]/yr,dht[:-1],linewidth=1.5,color='green')
-            ax1.set_xlabel('Time (yr)')
-            ax1.set_ylabel('Thermal Recovery (kJ/s)')
-            ax1.set_ylim(bottom=0.0)
+                ax3.plot(ts[:-1]/yr,w_T[i][:-1],linewidth=1.5)
+            ax3.set_xlabel('Time (yr)')
+            ax3.set_ylabel('Production Temperature (K)')
+            # ax3.set_ylim(bottom=273.0)
+#            ax3.plot(ts/yr,np.sum(Et,axis=1),linewidth=0.5,color='black')
+#            ax3.set_xlabel('Time (yr)')
+#            ax3.set_ylabel('Rock Energy (kJ)')
+            ax4 = fig.add_subplot(224)
+            ax4.plot(ts[:-1]/yr,dht[:-1],linewidth=1.5,color='green')
+            ax4.set_xlabel('Time (yr)')
+            ax4.set_ylabel('Thermal Extraction (kJ/s)')
+            # ax4.set_ylim(bottom=0.0)
 
     # ************************************************************************
     # stimulation - add frac (Vinj is total volume per stage, sand ratio to frac slurry by volume)
@@ -3529,6 +3678,46 @@ class mesh:
         
         ax5.set_xlabel('Radius (m)')
         ax5.set_ylabel('Avg. Aperture (m)')
+
+    # ************************************************************************
+    # optimization objective function (with $!!!), to be normalized to 2021 studies
+    # ************************************************************************
+    def get_economics(self, 
+                      interest = 0.04, #standard inflation rate, 4% rule
+                      sales_kWh = 0.1372, #$/kWh - customer electricity retail price                  
+                      drill_m = 2763.06, #$/m - Lowry et al, 2017 large diameter well baseline
+                      pad_fixed = 590e3, #$ Lowry et al, 2017 large diameter well baseline
+                      plant_kWe = 2025.65, #$/kWe simplified from GETEM model 
+                      explore_m = 2683.41, #$/m simplified from GETEM model
+                      oper_kWh = 0.03648, #$/kWh simplified from GETEM model
+                      quake_coef = 2e-4, #$/Mw for $300M Mw 5.5 quake Pohang (Westaway, 2021) & $17.2B Mw 6.3 quake Christchurch (Swiss Re)
+                      quake_exp = 5.0, #$/Mw for $300M Mw 5.5 quake Pohang (Westaway, 2021) & $17.2B Mw 6.3 quake Christchurch (Swiss Re)
+                      detail=False, #print cycle infomation
+                      plots=False): #plot results
+        #average kilowatt-hour
+        dt = (self.ts[1]-self.ts[0])/yr
+        life = self.rock.LifeSpan/yr
+        depth = self.rock.ResDepth
+        lateral = (self.rock.w_length * self.rock.w_count) + (self.rock.w_proportion*self.rock.w_length)
+        Max_Quake = -10.0
+        for i in range(0,len(self.faces)):
+            if self.faces[i].Mws:
+                Max_Quake = np.max([Max_Quake,np.max(self.faces[i].Mws)])
+        NPsum = np.sum(self.Pout[:])
+        #power profit
+        P = (sales_kWh-oper_kWh)*NPsum*dt*24.0*365.2425
+        #capital costs
+        C = 0.0
+        C += drill_m*(depth + lateral)
+        C += pad_fixed
+        C += plant_kWe*NPsum*dt/life
+        C += explore_m*depth
+        #quake cost
+        Q = quake_coef * np.exp(Max_Quake*quake_exp)
+        #net present value
+        NPV = P - C - Q
+        self.NPV = NPV
+        return NPV
         
 # ****************************************************************************
 #### test program (i.e. script development)
