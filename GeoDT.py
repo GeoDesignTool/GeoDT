@@ -256,7 +256,7 @@ class cauchy: #functions modified from JPM
         return Pc, Sn, tau
     #critical slip given fracture strike and dip
     def Pc_frac(self, strike, dip, phi, mcc):
-        #get fractrue normal vector
+        #get fracture normal vector
         nrmG=self.normal_from_dip(strike+np.pi/2, dip)
         return self.Pc(nrmG, phi, mcc)
     #Set cauchy stress tensor from rotated principal stresses
@@ -1139,24 +1139,24 @@ class mesh:
         for t in range(0,len(self.ts)-1):
             out += [['Pout:%.3f' %(self.ts[t]/yr),Pout[t]]]
 
-        #binary power
-        Bout = []
-        if self.Bout == []:
-            Bout = np.full(len(self.ts),np.nan)
-        else:
-            Bout = self.Bout
-        for t in range(0,len(self.ts)-1):
-            out += [['Bout:%.3f' %(self.ts[t]/yr),Bout[t]]]
+        # #binary power
+        # Bout = []
+        # if self.Bout == []:
+        #     Bout = np.full(len(self.ts),np.nan)
+        # else:
+        #     Bout = self.Bout
+        # for t in range(0,len(self.ts)-1):
+        #     out += [['Bout:%.3f' %(self.ts[t]/yr),Bout[t]]]
             
-        #thermal energy extraction
-        dhout = []
-        self.dhout = np.asarray(self.dhout)
-        if not self.dhout.any():
-            dhout = np.full(len(self.ts),np.nan)
-        else:
-            dhout = self.dhout
-        for t in range(0,len(self.ts)-1):
-            out += [['dhout:%.3f' %(self.ts[t]/yr),dhout[t]]]
+        # #thermal energy extraction
+        # dhout = []
+        # self.dhout = np.asarray(self.dhout)
+        # if not self.dhout.any():
+        #     dhout = np.full(len(self.ts),np.nan)
+        # else:
+        #     dhout = self.dhout
+        # for t in range(0,len(self.ts)-1):
+        #     out += [['dhout:%.3f' %(self.ts[t]/yr),dhout[t]]]
         
         #per well values
         if (printwells != 0) and (self.dhout.any()):
@@ -2804,31 +2804,34 @@ class mesh:
     
         #convergence criteria
         goal = 0.5
+        goalE = 0.03
         
         #iterate over time
         for t in range(0,len(ts)-1): #!!! add self-estimation of dE0 for stabilization
             #calculate nodal temperatures by pipe flow and nodal mixing
             iters = 0
             err = np.ones(N)*goal*10
-            E0_update_intervals = 10
+            E0_update_intervals = 5
             max_iters = 30*E0_update_intervals
+            E0e = np.zeros(Np) + Et[0,:]
+            dE0e = np.zeros(Np)
             
             #iterate for temperature stability
             while 1:
                 #calculate nodal fluid enthalpy #@@@ requires consideration of sensible heating (0<X<1) if not supercritical
                 hn = hTP[0]*Tn**3.0 + hTP[1]*Tn**2.0 + hTP[2]*Tn**1.0 + hTP[3]
-                    
+                #temperature convergence
                 kerr = np.max(np.abs(err))
-    
+                #energy convergence
+                eerr = np.max(np.abs(dE0e)/(np.abs(E0e)+1.0e-9))
                 #loop breaker
                 iters += 1
                 if iters > max_iters:
                     print( 'Heat solver halted after %i iterations' %(iters-1))
                     break
-                elif kerr < goal:#np.max(np.abs(err)) < goal:
+                elif (kerr < goal) and (eerr < goalE):#np.max(np.abs(err)) < goal:
                     print( 'Heat solver converged to %e Kelvin after %i iterations' %(goal,iters-1))
                     break
-                
                 #follow the flow to estimate heating/cooling of fluid per pipe
                 Ap = np.zeros(Np,dtype=float)
                 Bp = np.zeros(Np,dtype=float)
@@ -2841,7 +2844,6 @@ class mesh:
                     #working variables
                     n0 = self.pipes.n0[p]
                     n1 = self.pipes.n1[p]                      
-                    
                     #get overshoot limit for timestep for each pipe #!!! edit 9-13-2022 start
                     if (iters-1)%E0_update_intervals == 0:
                         dT = 0.5*(Tn[n1] + Tn[n0]) - Tr
@@ -2856,6 +2858,8 @@ class mesh:
                             E0p = dE0*2.0*pi*Rir*Lp[p] #kJ
                             Esp = Et[t,p]
                             Etp = np.max([E0p,Esp])
+                            dE0e[p] = Etp - E0e[p]
+                            E0e[p] = Etp
                             #initial rock thermal radius
                             R0[p] = np.exp(ERm*(np.log(np.abs(Etp/(Lp[p]*dT))))+ERb) + Rir #m
                             #initial rock energy transfer rates
@@ -2865,6 +2869,8 @@ class mesh:
                             E0p = dE0*self.pipes.W[p]*Lp[p] #kJ
                             Esp = Et[t,p]
                             Etp = np.max([E0p,Esp])
+                            dE0e[p] = Etp - E0e[p]
+                            E0e[p] = Etp
                             #rock thermal radius
                             R0[p] = Etp/(ResSv*self.pipes.W[p]*Lp[p]*dT) #m
                             #rock energy transfer rates
@@ -3428,7 +3434,7 @@ class mesh:
             self.GR_bh(i,fix=True)
         
         #***** final pressure calculation to set facture apertures
-        print( '{Pressure boundary conditions with stimulation disabled -> get fractrue apertures}')
+        print( '{Pressure boundary conditions with stimulation disabled -> get fracture apertures}')
         #fixed pressure solve
         q_well = np.full(len(self.wells),None)
         p_well = np.full(len(self.wells),None)
