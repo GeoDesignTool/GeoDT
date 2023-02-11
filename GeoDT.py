@@ -1061,7 +1061,7 @@ class mesh:
         #recovery
         qrec = 0.0
         if qinj > 0:
-            qrec = qpro/qinj
+            qrec = -qpro/qinj
         else:
             qrec = 1.0
         out += [['recovery',qrec]]
@@ -1290,31 +1290,31 @@ class mesh:
         w_col = [w_0,w_1,w_2,w_3,w_4]
         sg.writeVtk(w_obj, w_col, w_lab, vtkFile=(fname + '_wells.vtk'))
         
-        # #******   paint fractures   ******
-        # f_obj = [] #fractures
-        # f_col = [] #fractures colors
-        # f_lab = [] #fractures color labels
-        # f_lab = ['Face_Number','Node_Number','Type','Sn_MPa','Pc_MPa','Tau_MPa']
-        # f_0 = []
-        # f_1 = []
-        # f_2 = []
-        # f_3 = []
-        # f_4 = []
-        # f_5 = []
-        # #nodex = np.asarray(self.nodes)
-        # for i in range(6,len(self.faces)): #skip boundary node at np.inf
-        #     #add colors
-        #     f_0 += [i]
-        #     f_1 += [self.faces[i].ci]
-        #     f_2 += [self.faces[i].typ]
-        #     f_3 += [self.faces[i].sn/MPa]
-        #     f_4 += [self.faces[i].Pc/MPa]
-        #     f_5 += [self.faces[i].tau/MPa]
-        #     #add geometry
-        #     f_obj += [HF(r=0.5*self.faces[i].dia, x0=self.faces[i].c0, strikeRad=self.faces[i].str, dipRad=self.faces[i].dip, h=0.01*r)]
-        # #vtk file
-        # f_col = [f_0,f_1,f_2,f_3,f_4,f_5]
-        # sg.writeVtk(f_obj, f_col, f_lab, vtkFile=(fname + '_fracs.vtk'))
+        #******   paint fractures   ******
+        f_obj = [] #fractures
+        f_col = [] #fractures colors
+        f_lab = [] #fractures color labels
+        f_lab = ['Face_Number','Node_Number','Type','Sn_MPa','Pc_MPa','Tau_MPa']
+        f_0 = []
+        f_1 = []
+        f_2 = []
+        f_3 = []
+        f_4 = []
+        f_5 = []
+        #nodex = np.asarray(self.nodes)
+        for i in range(6,len(self.faces)): #skip boundary node at np.inf
+            #add colors
+            f_0 += [i]
+            f_1 += [self.faces[i].ci]
+            f_2 += [self.faces[i].typ]
+            f_3 += [self.faces[i].sn/MPa]
+            f_4 += [self.faces[i].Pc/MPa]
+            f_5 += [self.faces[i].tau/MPa]
+            #add geometry
+            f_obj += [HF(r=0.5*self.faces[i].dia, x0=self.faces[i].c0, strikeRad=self.faces[i].str, dipRad=self.faces[i].dip, h=0.01*r)]
+        #vtk file
+        f_col = [f_0,f_1,f_2,f_3,f_4,f_5]
+        sg.writeVtk(f_obj, f_col, f_lab, vtkFile=(fname + '_fracs.vtk'))
         
         #******   paint flowing fractures   ******
         q_obj = [] #fractures
@@ -2680,7 +2680,8 @@ class mesh:
                  H = -1.0, #kW/m2-K
                  dT0 = -666.6, #K
                  dE0 = -666.6, #kJ/m2
-                 detail=False):
+                 detail=False,
+                 lapse=False):
         print( '*** heat flow module ***')
         #****** default parameters ******
         if t_n < 0:
@@ -2971,6 +2972,12 @@ class mesh:
             Tt[t,:] = Tn
             #store thermal radii
             Rt[t,:] = R0
+            
+            #timelapse 3D
+            if lapse:
+                self.nodes.T = Tn
+                self.nodes.h = hn
+                self.build_vtk(fname='t%02d' %(t))
     
             #extracted energy during this time step
             Et[t+1] = Et[t] + np.abs(Ep)*dt
@@ -3066,7 +3073,10 @@ class mesh:
             i = int(i)
             p_mm += w_m[i]
             p_hm += w_h[i]*w_m[i]
-        p_hm = p_hm/p_mm
+        if p_mm < 0: #!!! error handling for zero production
+            p_hm = p_hm/p_mm
+        else:
+            p_hm = hr
         self.p_mm = p_mm #mixed produced mass flow rate
         self.p_hm = p_hm #mixed produced enthalpy
                 
@@ -3700,21 +3710,26 @@ class mesh:
                       quake_exp = 5.0, #$/Mw for $300M Mw 5.5 quake Pohang (Westaway, 2021) & $17.2B Mw 6.3 quake Christchurch (Swiss Re)
                       detail=False, #print cycle infomation
                       plots=False): #plot results
-        #average kilowatt-hour
+        #eliminate periods of negative net power production
+        Pout_NN = self.Pout+0.0
+        Pout_NN[Pout_NN < 0.0] = 0.0
+        NPsum = np.sum(Pout_NN)
+        #get system values
         dt = (self.ts[1]-self.ts[0])/yr
         life = self.rock.LifeSpan/yr
         depth = self.rock.ResDepth
-        lateral = (self.rock.w_length * self.rock.w_count) + (self.rock.w_proportion*self.rock.w_length)
+        lateral = (self.rock.w_length*self.rock.w_count) + (self.rock.w_proportion*self.rock.w_length)
+        drill_len = self.rock.ResDepth*(self.rock.w_count+1) + lateral
         Max_Quake = -10.0
         for i in range(0,len(self.faces)):
             if self.faces[i].Mws:
                 Max_Quake = np.max([Max_Quake,np.max(self.faces[i].Mws)])
-        NPsum = np.sum(self.Pout[:])
+        #NPsum = np.sum(self.Pout[:])
         #power profit
         P = (sales_kWh-oper_kWh)*NPsum*dt*24.0*365.2425
         #capital costs
         C = 0.0
-        C += drill_m*(depth + lateral)
+        C += drill_m*drill_len
         C += pad_fixed
         C += plant_kWe*NPsum*dt/life
         C += explore_m*depth
@@ -3722,8 +3737,16 @@ class mesh:
         Q = quake_coef * np.exp(Max_Quake*quake_exp)
         #net present value
         NPV = P - C - Q
+        #detail
+        if detail:
+            print('\n*** economics module ***')
+            print('   sales: $%.0f (%.2f kWh)' %(P,NPsum*dt*24.0*365.2425))
+            print('   capital: $%.0f (%.2f m drilled length)' %(C,drill_len))
+            print('   seismic: $%.0f (%.2f Mw max quake)' %(Q,Max_Quake))
+            print('   NPV: $%.0f' %(NPV))
+        
         self.NPV = NPV
-        return NPV
+        return NPV, P, C, Q
         
 # ****************************************************************************
 #### test program (i.e. script development)
