@@ -45,6 +45,8 @@ GPa=10.0**9.0#Pa
 darcy=9.869233*10**-13#m2
 mD=darcy*10.0**3.0#m2
 yr=365.2425*24.0*60.0*60.0#s
+mLmin = 1.66667e-8 #m3/s
+um2cm = 1.0e-12 #m2
 pi=math.pi
 
 # ****************************************************************************
@@ -324,7 +326,7 @@ class reservoir:
         self.ResKt = 2.5 # W/m-K
         self.ResSv = 2063.0 # kJ/m3-K
         self.AmbTempC = 25.0 # C
-        self.AmbPres = 0.101 #Example: 0.01 MPa #Atmospheric: 0.101 # MPa
+        self.AmbPres = 0.101*MPa #Example: 0.01 MPa #Atmospheric: 0.101 # MPa
         self.ResE = 50.0*GPa
         self.Resv = 0.3
         self.ResG = self.ResE/(2.0*(1.0+self.Resv))
@@ -354,11 +356,12 @@ class reservoir:
         self.b = np.asarray([0.999,1.0,1.001])
         self.N = np.asarray([0.0,0.6,2.0])
         self.alpha = np.asarray([2.0e-9,2.9e-8,10.0e-8])
+        self.prop_alpha = np.asarray([2.0e-9,2.9e-8,10.0e-8])
         self.bh = np.asarray([0.00005,0.0001,0.0002]) #np.asarray([0.00005,0.00010,0.00020])
         self.bh_min = 0.00005 #m
         self.bh_max = 0.02 #0.02000 #m
         self.bh_bound = 0.003
-        self.f_roughness = 0.8
+        self.f_roughness = np.asarray([0.80,0.90,1.00])
         #well parameters
         self.w_count = 3 #wells
         self.w_spacing = 200.0 #m
@@ -392,10 +395,10 @@ class reservoir:
         self.PoreRho = 980.0 #kg/m3 starting guess
         self.Poremu = 0.9*cP #Pa-s
         self.Porek = 0.1*mD #m2
-        self.Frack = 100.0*mD #m2
+        self.kf = 300.0*um2cm #m2
         #calculated parameters
         self.BH_T = self.ResDepth*10**-3.0*self.ResGradient + self.AmbTempC + 273.15 #K
-        self.BH_P = self.PoreRho*g*self.ResDepth #Pa
+        self.BH_P = self.PoreRho*g*self.ResDepth + self.AmbPres #Pa
         self.s1 = self.ResRho*g*self.ResDepth #Pa
         self.s2 = self.Ks2*(self.s1-self.BH_P)+self.BH_P #Pa
         self.s3 = self.Ks3*(self.s1-self.BH_P)+self.BH_P #Pa
@@ -406,7 +409,7 @@ class reservoir:
         #stimulation parameters
         self.perf = 1
         self.r_perf = 50.0 #m
-        self.sand = 0.3 #sand ratio in frac fluid
+        self.sand = 0.3 #sand ratio in frac fluid by volume
         self.leakoff = 0.0 #Carter leakoff
         self.dPp = -2.0*MPa #production well pressure drawdown
         self.dPi = 0.5*MPa 
@@ -415,6 +418,7 @@ class reservoir:
         self.Vinj = self.Qinj*self.LifeSpan
         self.Qstim = 0.04 #m3/s
         self.Vstim = 50000.0 #m3
+        self.pfinal_max = 999.9*MPa #Pa, maximum long term injection pressure
         self.bval = 1.0 #Gutenberg-Richter magnitude scaling
         self.phi = np.asarray([20.0*deg,35.0*deg,50.0*deg]) #rad
         self.mcc = np.asarray([5.0*MPa,10.0*MPa,15.0*MPa]) #Pa
@@ -425,14 +429,14 @@ class reservoir:
         #calculated parameters
         self.ResG = self.ResE/(2.0*(1.0+self.Resv))
         self.BH_T = self.ResDepth*10**-3.0*self.ResGradient + self.AmbTempC + 273.15 #K
-        self.BH_P = self.PoreRho*g*self.ResDepth #Pa
+        self.BH_P = self.PoreRho*g*self.ResDepth + self.AmbPres #Pa
         self.s1 = self.ResRho*g*self.ResDepth #Pa
         self.s2 = self.Ks2*(self.s1-self.BH_P)+self.BH_P #Pa
         self.s3 = self.Ks3*(self.s1-self.BH_P)+self.BH_P #Pa
         self.stress.set_sigG_from_Principal(self.s3, self.s2, self.s1, self.s3Azn, self.s3Dip)
         self.Vinj = self.Qinj*self.LifeSpan
-        self.rb = self.ra + 0.0254*0.5 # m
-        self.rc = self.ra + 0.0254*1.0 # m
+        #self.rb = self.ra + 0.0254*0.5 # m
+        #self.rc = self.ra + 0.0254*1.0 # m
         
 #surface object
 class surf:
@@ -450,7 +454,7 @@ class surf:
         self.typ = typ(ty)
         #shear strength
         self.phi = -1.0 #rad
-        self.mcc = -1.0 # Pa
+        self.mcc = -1.0 #Pa
         #stress state
         self.sn = 5.0*MPa
         self.En = 50.0*GPa
@@ -461,9 +465,13 @@ class surf:
         self.stim = 0
         self.Pmax = 0.0*MPa
         self.Pcen = 0.0*MPa
-        self.Mws = [-99.9]
-        self.hydroprop = False
+        self.Mws = [-99.9] #maximum magnitude seismic event tracker
         self.arup = 1.0 #rupture area available for seismicity
+        self.hydroprop = False
+        self.prop_load = 0.0 #m3 #absolute proppant volume
+        self.prop_alpha = norm_trunc(1,rock.prop_alpha[1],rock.prop_alpha[1],rock.prop_alpha[0],rock.prop_alpha[2])[0] #proppant compressibility modulus
+        self.roughness = np.random.uniform(rock.f_roughness[0],rock.f_roughness[2],(1))[0] #open flow roughness
+        self.kf = rock.kf #proppant pack permeability
         #scaling
         self.u_N = -1.0
         self.u_alpha = -1.0
@@ -495,6 +503,7 @@ class surf:
         #apertures
         self.bd = self.bh/self.u_N
         self.bd0 = self.bd
+        self.bd0p = 0.0
         self.vol = (4.0/3.0)*pi*0.25*self.dia**2.0*0.5*self.bd
         self.arup = 0.25*np.pi*self.dia**2.0
     #adjust fracture cohesion to prevent runaway stimulation at specified conditions
@@ -580,7 +589,8 @@ class surf:
        
 #line objects
 class line:
-    def __init__(self,x0=0.0,y0=0.0,z0=0.0,length=1.0,azn=0.0*deg,dip=0.0*deg,w_type='pipe',dia=0.0254*3.0,rough=80.0):
+    def __init__(self,x0=0.0,y0=0.0,z0=0.0,length=1.0,azn=0.0*deg,dip=0.0*deg,w_type='pipe',
+                 ra=0.0254*3.0,rb=0.0254*3.5,rc=0.0254*3.5,rough=80.0):
         #position geometry
         self.c0 = np.asarray([x0, y0, z0]) #origin
         self.leg = length #length
@@ -588,10 +598,10 @@ class line:
         self.dip = dip #axis dip from horizontal
         self.typ = typ(w_type) #type of well
         #flow geometry
-        self.ra = dia #m
-        self.rb = dia + 0.0254*0.5 # m
-        self.rc = dia + 0.0254*1.0 # m
-        self.rgh = 80.0
+        self.ra = ra #m
+        self.rb = rb #m
+        self.rc = rc #m
+        self.rgh = rough
         #stimulation traits
         self.hydrofrac = False #was well already hydrofraced?
         self.completed = False #was well stimulation process completed?
@@ -603,7 +613,7 @@ class nodes:
     def __init__(self):
         self.r0 = np.asarray([np.inf,np.inf,np.inf])
         self.all = np.asarray([self.r0])
-        self.tol = 0.001
+        self.tol = 0.0005
         self.num = len(self.all)
         self.p = np.zeros(self.num,dtype=float)
         self.T = np.zeros(self.num,dtype=float)
@@ -649,6 +659,7 @@ class pipes:
         self.Dh = [] #hydraulic aperture/diameter
         self.Dh_max = [] #hydraulic aperture/diameter limit
         self.frict = [] #hydraulic roughness
+        self.hydrofraced = False #tracker for fracture initiation
     #add a pipe
     def add(self, n0, n1, length, width, featTyp, featID, Dh=1.0, Dh_max=1.0, frict=1.0):
         self.n0 += [n0]
@@ -663,12 +674,15 @@ class pipes:
         self.Dh += [Dh]
         self.Dh_max += [Dh_max]
         self.frict += [frict]
+        self.hydrofraced = False
     #set hydraulic aperture limits based on minimum pressure drop at target flow rate
     def Dh_limit(self,Q,dP,rho=980.0,g=9.81,mu=0.9*cP,k=0.1*mD):
         for i in range(0,self.num):
             if (int(self.typ[i]) in [typ('injector'),typ('producer'),typ('pipe')]):
-                #a_max = (10.7e-5*self.L[i]*rho*g*Q/(dP*self.frict[i]**1.852))**(1.0/4.87)
-                a_max = (10.7e-4*self.L[i]*rho*g*Q/(dP*self.frict[i]**1.852))**(1.0/4.87)
+                #a_max = (10.7e-5*self.L[i]*rho*g*Q/(dP*self.frict[i]**1.852))**(1.0/4.87) #oldest
+                #a_max = (10.7e-4*self.L[i]*rho*g*Q/(dP*self.frict[i]**1.852))**(1.0/4.87) #old 2/11/23
+                Lscaled = self.L[i]*mu/(0.9*cP)
+                a_max = (10.7e-4*Lscaled*rho*g*Q/(dP*self.frict[i]**1.852))**(1.0/4.87)
                 self.Dh_max[i] = a_max
             elif (int(self.typ[i]) in [typ('boundary'),typ('fracture'),typ('propped'),typ('choke')]):
                 #bh_max = (12.0e-5*mu*Q*self.L[i]/(dP*self.W[i]))**(1.0/3.0)
@@ -782,9 +796,9 @@ class mesh:
 #            self.faces[n].u_gamma = gamma[n]
 #            #stress states
 #            self.faces[n].Pc, self.faces[n].sn, self.faces[n].tau = self.rock.stress.Pc_frac(self.faces[n].str, self.faces[n].dip, self.faces[n].phi, self.faces[n].mcc)
-            
-    # L - d - M - k Gutenberg-Richter based aperture stimulation
-    def GR_bh(self, f_id, fix=False): #, pp=-666.0):
+
+    # Propped fracture property estimation with geomechanics
+    def hydromech(self, f_id, fix=False): #, pp=-666.0):
         #initialize stim
         stim = False
         
@@ -794,49 +808,19 @@ class mesh:
             stim = True
             print( '-> fracture stimulated: %i' %(f_id))
 
-        #fracture parameters
-        f_radius = 0.5*self.faces[f_id].dia
-        
         #pressures for analysis
         e_max = self.faces[f_id].sn - self.faces[f_id].Pmax
-        #e_cen = self.faces[f_id].sn - self.faces[f_id].Pcen
         
-        # #if not stimulated 
-        # if stim == False:
-        #     #compute stress dependent apertures
-        #     bd0 = self.faces[f_id].bd0
-        #     bd = bd0*np.exp(-self.faces[f_id].u_alpha*e_cen)
-        #     bh = bd*self.faces[f_id].u_N
-        #     #note that fracture is closed
-        #     self.faces[f_id].hydroprop = False
-        # #if fixed (no stimulation allowed)
-        # elif fix:
-        if not(stim) or fix: #!!!
-            bd0 = self.faces[f_id].bd0
-            #if open
-            if (e_max < 0.0):
-                #maximum aperture from Sneddon's (PKN) penny fracture aperture
-                bd = (-8.0*e_max*(1.0-self.rock.Resv**2.0)*f_radius)/(pi*self.rock.ResE) #m
-                #hydraulic aperture
-                bh = bd*self.rock.f_roughness #m
-                #add bd0 for equation continuity
-                bd = bd + bd0
-                bh = bh + bd0*self.faces[f_id].u_N
-                #note that fracture is hydropropped
-                self.faces[f_id].hydroprop = True
-            #if closed
-            else:
-                #stress closure
-                bd = bd0 * np.exp(-self.faces[f_id].u_alpha*e_max)
-                #hydraulic aperture
-                bh = bd * self.faces[f_id].u_N
-                #note that fracture is closed
-                self.faces[f_id].hydroprop = False
-        #if stimulated
-        else:
-            #*** shear component ***
+        #original bd0
+        bd0 = self.faces[f_id].bd0
+
+        #stimulation enabled
+        if stim and not(fix):
+            #*** shear ***
+            #don't let shear be zero
+            if self.faces[f_id].tau < 1.0:
+                self.faces[f_id].tau = 1.0
             #maximum moment (shear stress method)
-            #M0max = self.faces[f_id].tau*(0.25*np.pi*self.faces[f_id].dia**2.0)**(3.0/2.0)
             M0max = self.faces[f_id].tau*self.faces[f_id].arup**(3.0/2.0)
             Mwmax = (np.log10(M0max)-9.1)/1.5
             #mw sample from G-R
@@ -856,67 +840,222 @@ class mesh:
             self.faces[f_id].Mws += [mw]
             #add to zero-stress dilatant aperture
             bd0 = self.faces[f_id].bd0 + dbd
-            
-            #*** tensile component ***
-            #if open
+            #override rupture length in tensile fractures to avoid overpredicting tensile seismicity
             if (e_max < 0.0):
-                #maximum aperture from Sneddon's (PKN) penny fracture aperture
-                bd = (-8.0*e_max*(1.0-self.rock.Resv**2.0)*f_radius)/(pi*self.rock.ResE) #m
-                #hydraulic aperture
-                bh = bd*self.rock.f_roughness #m
-                #add bd0 for equation continuity
-                bd = bd + bd0
-                bh = bh + bd0*self.faces[f_id].u_N
-                #note that fracture is hydropropped
-                self.faces[f_id].hydroprop = True
-                #override rupture length with full length
                 Lr = self.faces[f_id].dia
-            #if closed
-            else:
-                #stress closure
-                #bd = bd0 * np.exp(-self.faces[f_id].u_alpha*e_cen) #!!!
-                bd = bd0 * np.exp(-self.faces[f_id].u_alpha*e_max)
-                #hydraulic aperture
-                bh = bd * self.faces[f_id].u_N
-                #note that fracture is closed
-                self.faces[f_id].hydroprop = False
-            
+                
             #*** growth ***
-            #grow fracture by larger of 20% fracture size or 5% domain size #!!!
+            #grow fracture by larger of 20% fracture size or 5% domain size
             add_dia = np.max([0.2*self.faces[f_id].dia,0.05*self.rock.size])
-            #deduct rupture length from rupture area
+            #deduct event's rupture area from residual rupture area
             self.faces[f_id].arup = np.max([self.faces[f_id].arup - 0.25*np.pi*Lr**2.0,  0.1])           
             #update rupture area
             self.faces[f_id].arup = self.faces[f_id].arup + 0.25*np.pi*((self.faces[f_id].dia + add_dia)**2.0 - self.faces[f_id].dia**2.0)
-            #update fracture diameter
+            #update fracture size
             self.faces[f_id].dia += add_dia
-                
-        #limiters for flow solver stability
-        if bh < self.rock.bh_min:
-            bh = self.rock.bh_min
-            # print( '-> Alert: bh at min')
-        elif bh > self.rock.bh_max:
-            bh = self.rock.bh_max
-            # print( '-> Alert: bh at max')
-        
+            
+        #fracture parameters
+        f_radius = 0.5*self.faces[f_id].dia
+        #propped closure with ideal loose spherical packing (Allen, 1985; Frings et al., 2011)
+        prop_load = np.max([0.0,self.faces[f_id].prop_load])
+        bd0p = (prop_load/0.64)/(0.25*np.pi*self.faces[f_id].dia**2.0)
+        #closure pressure onto a proppant pack
+        e_crit = (bd0p*np.pi*self.rock.ResE)/(-8.0*(1.0-self.rock.Resv**2.0)*f_radius)
+        #hydropropped fracture with proppant pillars
+        if (e_max < e_crit):
+            #maximum aperture from Sneddon's (PKN) penny fracture aperture
+            bdt = (-8.0*e_max*(1.0-self.rock.Resv**2.0)*f_radius)/(pi*self.rock.ResE) #m
+            #channel width ratios by filled volume to total volume
+            wp_wt = bd0p/bdt
+            wo_wt = 1.0 - wp_wt
+            #flow through open channels
+            qo = wo_wt*(self.faces[f_id].roughness * bdt)**3.0
+            #flow through propped area
+            qp = wp_wt*(12.0 * self.faces[f_id].kf * bdt)
+            #flow through shear channels
+            qs = (self.faces[f_id].u_N * bd0)**3.0
+            #total dilated aperture
+            bd = bdt + bd0
+            #total hydraulic aperture
+            bh = (qo + qp + qs)**(1.0/3.0)
+            #note that fracture is hydropropped
+            self.faces[f_id].hydroprop = True
+        #proppant propped fracture 
+        elif (e_max < 0.0):
+            #flow through propped area
+            qp = 12.0 * self.faces[f_id].kf * bd0p*np.exp(-self.faces[f_id].prop_alpha*(e_max-e_crit))
+            #flow through shear channels
+            qs = (self.faces[f_id].u_N * bd0)**3.0
+            #total dilated aperture
+            bd = bd0p*np.exp(-self.faces[f_id].prop_alpha*(e_max-e_crit)) + bd0
+            #total hydraulic aperture
+            bh = (qp + qs)**(1.0/3.0)
+            #note that fracture is not hydropropped
+            self.faces[f_id].hydroprop = False
+        #proppant propped fracture 
+        else:
+            #flow through propped area
+            qp = 12.0 * self.faces[f_id].kf * bd0p * np.exp(-self.faces[f_id].prop_alpha*(e_max-e_crit))
+            #flow through shear channels
+            qs = (self.faces[f_id].u_N * bd0 * np.exp(-self.faces[f_id].u_alpha*e_max))**3.0
+            #total dilated aperture
+            bd = (bd0p*np.exp(-self.faces[f_id].prop_alpha*(e_max-e_crit)) +
+                  bd0*np.exp(-self.faces[f_id].u_alpha*e_max))
+            #total hydraulic aperture
+            bh = (qp + qs)**(1.0/3.0)
+            #note that fracture is not hydropropped
+            self.faces[f_id].hydroprop = False
+            
         #override for boundary fractures
         if (int(self.faces[f_id].typ) in [typ('boundary')]):
             bh = self.rock.bh_bound
         
-#        #reset stim
-#        self.faces[f_id].stim = False
-        
         #volume
         vol = (4.0/3.0)*pi*0.25*self.faces[f_id].dia**2.0*0.5*bd
+        
+        #update proppant loading
+        dvol = vol - self.faces[f_id].vol
+        self.faces[f_id].prop_load = self.faces[f_id].prop_load + np.max([0.0,dvol])*self.rock.sand
 
         #update fracture properties
         self.faces[f_id].bd = bd
         self.faces[f_id].bh = bh
         self.faces[f_id].vol = vol
         self.faces[f_id].bd0 = bd0
+        self.faces[f_id].bd0p = bd0p 
         
         #return true if stimulated
         return stim
+
+    # # L - d - M - k Gutenberg-Richter based aperture stimulation
+    # def GR_bh(self, f_id, fix=False): #, pp=-666.0):
+    #     #initialize stim
+    #     stim = False
+        
+    #     #check if fracture will be stimulated
+    #     if (self.faces[f_id].Pmax >= self.faces[f_id].Pc):
+    #         self.faces[f_id].stim += 1
+    #         stim = True
+    #         print( '-> fracture stimulated: %i' %(f_id))
+
+    #     #fracture parameters
+    #     f_radius = 0.5*self.faces[f_id].dia
+        
+    #     #pressures for analysis
+    #     e_max = self.faces[f_id].sn - self.faces[f_id].Pmax
+        
+        
+    #             self.prop_load = 0.0 #m3 #absolute proppant volume
+    #             self.prop_alpha = rock.prop_alpha #proppant compressibility modulus
+        
+        
+    #     #stimulation disabled
+    #     if not(stim) or fix:
+    #         bd0 = self.faces[f_id].bd0
+    #         #if open
+    #         if (e_max < 0.0):
+    #             #maximum aperture from Sneddon's (PKN) penny fracture aperture
+    #             bd = (-8.0*e_max*(1.0-self.rock.Resv**2.0)*f_radius)/(pi*self.rock.ResE) #m
+    #             #hydraulic aperture
+    #             bh = bd*self.rock.f_roughness #m
+    #             #add bd0 for equation continuity
+    #             bd = bd + bd0
+    #             bh = bh + bd0*self.faces[f_id].u_N
+    #             #note that fracture is hydropropped
+    #             self.faces[f_id].hydroprop = True
+    #         #if closed
+    #         else:
+    #             #stress closure
+    #             bd = bd0 * np.exp(-self.faces[f_id].u_alpha*e_max)
+    #             #hydraulic aperture
+    #             bh = bd * self.faces[f_id].u_N
+    #             #note that fracture is closed
+    #             self.faces[f_id].hydroprop = False
+    #     #stimulation enabled
+    #     else:
+    #         #*** shear component ***
+    #         #don't let shear be zero
+    #         if self.faces[f_id].tau < 1.0:
+    #             self.faces[f_id].tau = 1.0
+    #         #maximum moment (shear stress method)
+    #         #M0max = self.faces[f_id].tau*(0.25*np.pi*self.faces[f_id].dia**2.0)**(3.0/2.0)
+    #         M0max = self.faces[f_id].tau*self.faces[f_id].arup**(3.0/2.0)
+    #         Mwmax = (np.log10(M0max)-9.1)/1.5
+    #         #mw sample from G-R
+    #         mw = exponential_trunc(1,bval=self.rock.bval,Mmax=Mwmax,Mwin=1.0,prob=0.1)[0]
+    #         #convert to moment magnitude (Mo)
+    #         mo = 10.0**(mw * 1.5 + 9.1)
+    #         # rupture length
+    #         Lr = (4*((mo/self.faces[f_id].tau)**(2/3))/np.pi)**0.5
+    #         # intermediate variables
+    #         ds = mo / ((0.25*np.pi*Lr**2.0) * self.rock.ResG)
+    #         d0 = 0.5 * self.faces[f_id].u_gamma * (self.faces[f_id].dia ** self.faces[f_id].u_n1)
+    #         bd0 = self.faces[f_id].u_a * (d0 ** self.faces[f_id].u_b)
+    #         d1 = d0 + ds
+    #         bd1 = self.faces[f_id].u_a * (d1 ** self.faces[f_id].u_b)
+    #         dbd = bd1- bd0
+    #         #record stimulation magnitude and correct for seismic overestimation
+    #         self.faces[f_id].Mws += [mw]
+    #         #add to zero-stress dilatant aperture
+    #         bd0 = self.faces[f_id].bd0 + dbd
+            
+    #         #*** tensile component ***
+    #         #if open
+    #         if (e_max < 0.0):
+    #             #maximum aperture from Sneddon's (PKN) penny fracture aperture
+    #             bd = (-8.0*e_max*(1.0-self.rock.Resv**2.0)*f_radius)/(pi*self.rock.ResE) #m
+    #             #hydraulic aperture
+    #             bh = bd*self.rock.f_roughness #m
+    #             #add bd0 for equation continuity
+    #             bd = bd + bd0
+    #             bh = bh + bd0*self.faces[f_id].u_N
+    #             #note that fracture is hydropropped
+    #             self.faces[f_id].hydroprop = True
+    #             #override rupture length with full length
+    #             Lr = self.faces[f_id].dia
+    #         #if closed
+    #         else:
+    #             #stress closure
+    #             #bd = bd0 * np.exp(-self.faces[f_id].u_alpha*e_cen) #!!!
+    #             bd = bd0 * np.exp(-self.faces[f_id].u_alpha*e_max)
+    #             #hydraulic aperture
+    #             bh = bd * self.faces[f_id].u_N
+    #             #note that fracture is closed
+    #             self.faces[f_id].hydroprop = False
+            
+    #         #*** growth ***
+    #         #grow fracture by larger of 20% fracture size or 5% domain size #!!!
+    #         add_dia = np.max([0.2*self.faces[f_id].dia,0.05*self.rock.size])
+    #         #deduct event's rupture area from residual rupture area
+    #         self.faces[f_id].arup = np.max([self.faces[f_id].arup - 0.25*np.pi*Lr**2.0,  0.1])           
+    #         #update rupture area
+    #         self.faces[f_id].arup = self.faces[f_id].arup + 0.25*np.pi*((self.faces[f_id].dia + add_dia)**2.0 - self.faces[f_id].dia**2.0)
+    #         #update fracture diameter
+    #         self.faces[f_id].dia += add_dia
+                
+    #     # #limiters for flow solver stability #!!! limiters removed 02/13/23
+    #     # if bh < self.rock.bh_min:
+    #     #     bh = self.rock.bh_min
+    #     #     # print( '-> Alert: bh at min')
+    #     # elif bh > self.rock.bh_max:
+    #     #     bh = self.rock.bh_max
+    #     #     # print( '-> Alert: bh at max')
+        
+    #     #override for boundary fractures
+    #     if (int(self.faces[f_id].typ) in [typ('boundary')]):
+    #         bh = self.rock.bh_bound
+        
+    #     #volume
+    #     vol = (4.0/3.0)*pi*0.25*self.faces[f_id].dia**2.0*0.5*bd
+
+    #     #update fracture properties
+    #     self.faces[f_id].bd = bd
+    #     self.faces[f_id].bh = bh
+    #     self.faces[f_id].vol = vol
+    #     self.faces[f_id].bd0 = bd0
+        
+    #     #return true if stimulated
+    #     return stim
     
     def save(self,fname='input_output.txt',pin='',aux=[],printwells=0,time=True):
         out = []
@@ -953,6 +1092,8 @@ class mesh:
         for i in range(0,3):
             out += [['alpha%i' %(i),r.alpha[i]]]
         for i in range(0,3):
+            out += [['prop_alpha%i' %(i),r.prop_alpha[i]]]
+        for i in range(0,3):
             out += [['gamma%i' %(i),r.gamma[i]]]
         for i in range(0,3):
             out += [['n1%i' %(i),r.n1[i]]]
@@ -967,7 +1108,8 @@ class mesh:
         out += [['bh_min',r.bh_min]]
         out += [['bh_max',r.bh_max]]
         out += [['bh_bound',r.bh_bound]]
-        out += [['f_roughness',r.f_roughness]]
+        for i in range(0,3):
+            out += [['f_roughness%i' %(i),r.f_roughness[i]]]
         out += [['w_count',r.w_count]]
         out += [['w_spacing',r.w_spacing]]
         out += [['w_length',r.w_length]]
@@ -991,11 +1133,11 @@ class mesh:
         out += [['Tinj',r.Tinj]]
         out += [['H_ConvCoef',r.H_ConvCoef]]
         out += [['dT0',r.dT0]]
-        out += [['dE0',r.dE0]]
+        # out += [['dE0',r.dE0]]
         out += [['PoreRho',r.PoreRho]]
         out += [['Poremu',r.Poremu]]
         out += [['Porek',r.Porek]]
-        out += [['Frack',r.Frack]]
+        out += [['kf',r.kf]]
         out += [['BH_T',r.BH_T]]
         out += [['BH_P',r.BH_P]]
         out += [['s1',r.s1]]
@@ -1004,7 +1146,7 @@ class mesh:
         out += [['perf',r.perf]]
         out += [['r_perf',r.r_perf]]
         out += [['sand',r.sand]]
-        out += [['leakoff',r.leakoff]]
+        # out += [['leakoff',r.leakoff]]
         out += [['dPp',r.dPp]]
         out += [['dPi',r.dPi]]
         out += [['stim_limit',r.stim_limit]]
@@ -1012,6 +1154,7 @@ class mesh:
         out += [['Vinj',r.Vinj]]
         out += [['Qstim',r.Qstim]]
         out += [['Vstim',r.Vstim]]
+        out += [['pfinal_max',r.pfinal_max]]
         out += [['bval',r.bval]]
         for i in range(0,3):
             out += [['phi%i' %(i),r.phi[i]]]
@@ -1159,7 +1302,7 @@ class mesh:
         #     out += [['dhout:%.3f' %(self.ts[t]/yr),dhout[t]]]
         
         #per well values
-        if (printwells != 0) and (self.dhout.any()):
+        if (printwells != 0) and (self.w_m.any()):
             # #per well volume flow rate
             # dummy = np.zeros(20,dtype=float)
             # for i in range(0,len(self.p_q)):
@@ -1256,163 +1399,199 @@ class mesh:
 #        
 #        return out
         
-    def build_vtk(self,fname='default'):
+    def build_vtk(self,fname='default',vtype=[1,1,1,1,1,1]):
         #******   scaling       ******
         r = 0.002*self.rock.size
         
         #******   paint wells   ******
-        w_obj = [] #fractures
-        w_col = [] #fractures colors
-        w_lab = [] #fractures color labels
-        w_lab = ['Well_Number','Well_Type','Inner_Radius','Roughness','Outer_Radius']
-        w_0 = []
-        w_1 = []
-        w_2 = []
-        w_3 = []
-        w_4 = []
-        #nodex = np.asarray(self.nodes)
-        for i in range(0,len(self.wells)): #skip boundary node at np.inf
-            #add colors
-            w_0 += [i]
-            w_1 += [self.wells[i].typ]
-            w_2 += [self.wells[i].ra]
-            w_3 += [self.wells[i].rgh]
-            w_4 += [self.wells[i].rc]
-            #add geometry
-            azn = self.wells[i].azn
-            dip = self.wells[i].dip
-            leg = self.wells[i].leg
-            vAxi = np.asarray([math.sin(azn)*math.cos(-dip), math.cos(azn)*math.cos(-dip), math.sin(-dip)])
-            c0 = self.wells[i].c0
-            c1 = c0 + vAxi*leg
-            w_obj += [sg.cylObj(x0=c0, x1=c1, r=1.5*r)]
-        #vtk file
-        w_col = [w_0,w_1,w_2,w_3,w_4]
-        sg.writeVtk(w_obj, w_col, w_lab, vtkFile=(fname + '_wells.vtk'))
+        if vtype[0]:
+            w_obj = [] #fractures
+            w_col = [] #fractures colors
+            w_lab = [] #fractures color labels
+            w_lab = ['Well_Number','Well_Type','Inner_Radius','Roughness','Outer_Radius']
+            w_0 = []
+            w_1 = []
+            w_2 = []
+            w_3 = []
+            w_4 = []
+            #nodex = np.asarray(self.nodes)
+            for i in range(0,len(self.wells)): #skip boundary node at np.inf
+                #add colors
+                w_0 += [i]
+                w_1 += [self.wells[i].typ]
+                w_2 += [self.wells[i].ra]
+                w_3 += [self.wells[i].rgh]
+                w_4 += [self.wells[i].rc]
+                #add geometry
+                azn = self.wells[i].azn
+                dip = self.wells[i].dip
+                leg = self.wells[i].leg
+                vAxi = np.asarray([math.sin(azn)*math.cos(-dip), math.cos(azn)*math.cos(-dip), math.sin(-dip)])
+                c0 = self.wells[i].c0
+                c1 = c0 + vAxi*leg
+                w_obj += [sg.cylObj(x0=c0, x1=c1, r=1.5*r)]
+            #vtk file
+            w_col = [w_0,w_1,w_2,w_3,w_4]
+            sg.writeVtk(w_obj, w_col, w_lab, vtkFile=(fname + '_wells.vtk'))
         
         #******   paint fractures   ******
-        f_obj = [] #fractures
-        f_col = [] #fractures colors
-        f_lab = [] #fractures color labels
-        f_lab = ['Face_Number','Node_Number','Type','Sn_MPa','Pc_MPa','Tau_MPa']
-        f_0 = []
-        f_1 = []
-        f_2 = []
-        f_3 = []
-        f_4 = []
-        f_5 = []
-        #nodex = np.asarray(self.nodes)
-        for i in range(6,len(self.faces)): #skip boundary node at np.inf
-            #add colors
-            f_0 += [i]
-            f_1 += [self.faces[i].ci]
-            f_2 += [self.faces[i].typ]
-            f_3 += [self.faces[i].sn/MPa]
-            f_4 += [self.faces[i].Pc/MPa]
-            f_5 += [self.faces[i].tau/MPa]
-            #add geometry
-            f_obj += [HF(r=0.5*self.faces[i].dia, x0=self.faces[i].c0, strikeRad=self.faces[i].str, dipRad=self.faces[i].dip, h=0.01*r)]
-        #vtk file
-        f_col = [f_0,f_1,f_2,f_3,f_4,f_5]
-        sg.writeVtk(f_obj, f_col, f_lab, vtkFile=(fname + '_fracs.vtk'))
+        if vtype[1] and len(self.faces)>6:
+            f_obj = [] #fractures
+            f_col = [] #fractures colors
+            f_lab = [] #fractures color labels
+            f_lab = ['Face_Number','Node_Number','Type','Sn_MPa','Pc_MPa','Tau_MPa']
+            f_0 = []
+            f_1 = []
+            f_2 = []
+            f_3 = []
+            f_4 = []
+            f_5 = []
+            #nodex = np.asarray(self.nodes)
+            for i in range(6,len(self.faces)): #skip boundary node at np.inf
+                #add colors
+                f_0 += [i]
+                f_1 += [self.faces[i].ci]
+                f_2 += [self.faces[i].typ]
+                f_3 += [self.faces[i].sn/MPa]
+                f_4 += [self.faces[i].Pc/MPa]
+                f_5 += [self.faces[i].tau/MPa]
+                #add geometry
+                f_obj += [HF(r=0.5*self.faces[i].dia, x0=self.faces[i].c0, strikeRad=self.faces[i].str, dipRad=self.faces[i].dip, h=0.01*r)]
+            #vtk file
+            f_col = [f_0,f_1,f_2,f_3,f_4,f_5]
+            sg.writeVtk(f_obj, f_col, f_lab, vtkFile=(fname + '_fracs.vtk'))
         
         #******   paint flowing fractures   ******
-        q_obj = [] #fractures
-        q_col = [] #fractures colors
-        q_lab = [] #fractures color labels
-        q_lab = ['Face_Number','Node_Number','Type','bd_mm','bh_mm','Sn_MPa','Pcen_MPa','Pc_MPa','stim','Pmax_MPa','Tau_MPa','Mwmax']
-        q_0 = []
-        q_1 = []
-        q_2 = []
-        q_3 = []
-        q_4 = []
-        q_5 = []
-        q_6 = []
-        q_7 = []
-        q_8 = []
-        q_9 = []
-        q_10 = []
-        q_11 = []
-        #nodex = np.asarray(self.nodes)
-        for i in range(6,len(self.faces)): #skip boundary node at np.inf
-            if self.faces[i].ci >= 0:
-                #add colors
-                q_0 += [i]
-                q_1 += [self.faces[i].ci]
-                q_2 += [self.faces[i].typ]
-                q_3 += [self.faces[i].bd*1000]
-                q_4 += [self.faces[i].bh*1000]
-                q_5 += [self.faces[i].sn/MPa]
-                q_6 += [self.faces[i].Pcen]
-                q_7 += [self.faces[i].Pc/MPa]
-                q_8 += [self.faces[i].stim]
-                q_9 += [self.faces[i].Pmax]
-                q_10 += [self.faces[i].tau/MPa]
-                q_11 += [np.max(self.faces[i].Mws)]
-                #add geometry
-                q_obj += [HF(r=0.5*self.faces[i].dia, x0=self.faces[i].c0, strikeRad=self.faces[i].str, dipRad=self.faces[i].dip, h=0.02*r)]
-        #vtk file
-        q_col = [q_0,q_1,q_2,q_3,q_4,q_5,q_6,q_7,q_8,q_9,q_10,q_11]
-        sg.writeVtk(q_obj, q_col, q_lab, vtkFile=(fname + '_fnets.vtk'))
+        if vtype[2] and len(self.faces)>6:
+            q_obj = [] #fractures
+            q_col = [] #fractures colors
+            q_lab = [] #fractures color labels
+            q_lab = ['Face_Number','Node_Number','Type','Dilation_mm','Hydraulic_mm','Sn_MPa','Pcen_MPa','Pc_MPa','stim','Pmax_MPa','Tau_MPa','Mwmax','Propped_mm','Prop_m3']
+            q_0 = []
+            q_1 = []
+            q_2 = []
+            q_3 = []
+            q_4 = []
+            q_5 = []
+            q_6 = []
+            q_7 = []
+            q_8 = []
+            q_9 = []
+            q_10 = []
+            q_11 = []
+            q_12 = []
+            q_13 = []
+            #nodex = np.asarray(self.nodes)
+            for i in range(6,len(self.faces)): #skip boundary node at np.inf
+                if self.faces[i].ci >= 0:
+                    #add colors
+                    q_0 += [i]
+                    q_1 += [self.faces[i].ci]
+                    q_2 += [self.faces[i].typ]
+                    q_3 += [self.faces[i].bd*1000]
+                    q_4 += [self.faces[i].bh*1000]
+                    q_5 += [self.faces[i].sn/MPa]
+                    q_6 += [self.faces[i].Pcen]
+                    q_7 += [self.faces[i].Pc/MPa]
+                    q_8 += [self.faces[i].stim]
+                    q_9 += [self.faces[i].Pmax]
+                    q_10 += [self.faces[i].tau/MPa]
+                    q_11 += [np.max(self.faces[i].Mws)]
+                    q_12 +=  [self.faces[i].bd0p*1000]
+                    q_13 +=  [self.faces[i].prop_load]
+                    #add geometry
+                    q_obj += [HF(r=0.5*self.faces[i].dia, x0=self.faces[i].c0, strikeRad=self.faces[i].str, dipRad=self.faces[i].dip, h=0.02*r)]
+            #vtk file
+            q_col = [q_0,q_1,q_2,q_3,q_4,q_5,q_6,q_7,q_8,q_9,q_10,q_11,q_12,q_13]
+            sg.writeVtk(q_obj, q_col, q_lab, vtkFile=(fname + '_fnets.vtk'))
         
         #******   paint nodes   ******
-        n_obj = [] #nodes
-        n_col = [] #nodes colors
-        n_lab = [] #nodes color labels
-        n_lab = ['Node_Number','Node_Pressure_MPa','Node_Temperature_K','Node_Enthalpy_kJ/kg']
-        n_0 = []
-        n_1 = []
-        n_2 = []
-        n_3 = []
-        #nodex = np.asarray(self.nodes)
-        for i in range(1,self.nodes.num): #skip boundary node at np.inf
-            #add colors
-            n_0 += [i]
-            n_1 += [self.nodes.p[i]/MPa]
-            n_2 += [self.nodes.T[i]]
-            n_3 += [self.nodes.h[i]]
-            #add geometry
-            n_obj += [sg.cylObj(x0=self.nodes.all[i]+np.asarray([0.0,0.0,-r]), x1=self.nodes.all[i]+np.asarray([0.0,0.0,r]), r=r)]
-        #vtk file
-        n_col = [n_0,n_1,n_2,n_3]
-        sg.writeVtk(n_obj, n_col, n_lab, vtkFile=(fname + '_nodes.vtk'))
+        if vtype[3]:
+            n_obj = [] #nodes
+            n_col = [] #nodes colors
+            n_lab = [] #nodes color labels
+            n_lab = ['Node_Number','Node_Pressure_MPa','Node_Temperature_K','Node_Enthalpy_kJ/kg']
+            n_0 = []
+            n_1 = []
+            n_2 = []
+            n_3 = []
+            #nodex = np.asarray(self.nodes)
+            for i in range(1,self.nodes.num): #skip boundary node at np.inf
+                #add colors
+                n_0 += [i]
+                n_1 += [self.nodes.p[i]/MPa]
+                n_2 += [self.nodes.T[i]]
+                n_3 += [self.nodes.h[i]]
+                #add geometry
+                n_obj += [sg.cylObj(x0=self.nodes.all[i]+np.asarray([0.0,0.0,-r]), x1=self.nodes.all[i]+np.asarray([0.0,0.0,r]), r=r)]
+            #vtk file
+            n_col = [n_0,n_1,n_2,n_3]
+            sg.writeVtk(n_obj, n_col, n_lab, vtkFile=(fname + '_nodes.vtk'))
 
         #******   paint pipes   ******
-        p_obj = [] #pipes
-        p_col = [] #pipes colors
-        p_lab = [] #pipes color labels
-        p_lab = ['Pipe_Number','Type','Pipe_Flow_Rate_m3_s','Height_m','Length_m','Hydraulic_Aperture_mm','Max_Aperture_mm','Friction']
-        p_0 = []
-        p_1 = []
-        p_2 = []
-        p_3 = []
-        p_4 = []
-        p_5 = []
-        p_6 = []
-        p_7 = []
-        qs = np.asarray(self.q)
-        if not qs.any():
-            qs = np.zeros(self.pipes.num)
-        qs = np.abs(qs)
-        for i in range(0,self.pipes.num):
-            #add geometry
-            x0 = self.nodes.all[self.pipes.n0[i]]
-            x1 = self.nodes.all[self.pipes.n1[i]]
-            #don't include boundary node
-            if not(np.isinf(x0[0]) or np.isinf(x1[0])):
-                p_obj += [sg.cylObj(x0=x0, x1=x1, r=0.666*r)]            
+        if vtype[4]:
+            p_obj = [] #pipes
+            p_col = [] #pipes colors
+            p_lab = [] #pipes color labels
+            p_lab = ['Pipe_Number','Type','Pipe_Flow_Rate_m3_s','Height_m','Length_m','Hydraulic_Aperture_mm','Max_Aperture_mm','Friction']
+            p_0 = []
+            p_1 = []
+            p_2 = []
+            p_3 = []
+            p_4 = []
+            p_5 = []
+            p_6 = []
+            p_7 = []
+            qs = np.asarray(self.q)
+            if not qs.any():
+                qs = np.zeros(self.pipes.num)
+            qs = np.abs(qs)
+            for i in range(0,self.pipes.num):
+                #add geometry
+                x0 = self.nodes.all[self.pipes.n0[i]]
+                x1 = self.nodes.all[self.pipes.n1[i]]
+                #don't include boundary node
+                if not(np.isinf(x0[0]) or np.isinf(x1[0])):
+                    p_obj += [sg.cylObj(x0=x0, x1=x1, r=0.666*r)]            
+                    #add colors
+                    p_0 += [i]
+                    p_1 += [self.pipes.typ[i]]
+                    p_2 += [qs[i]]
+                    p_3 += [self.pipes.W[i]]
+                    p_4 += [self.pipes.L[i]]
+                    p_5 += [self.pipes.Dh[i]*1000]
+                    p_6 += [self.pipes.Dh_max[i]*1000]
+                    p_7 += [self.pipes.frict[i]]
+            #vtk file
+            p_col = [p_0,p_1,p_2,p_3,p_4,p_5,p_6,p_7]
+            sg.writeVtk(p_obj, p_col, p_lab, vtkFile=(fname + '_flow.vtk'))
+
+        #******   paint boundaries   ******
+        if vtype[5]:
+            f_obj = [] #fractures
+            f_col = [] #fractures colors
+            f_lab = [] #fractures color labels
+            f_lab = ['Face_Number','Node_Number','Type','Sn_MPa','Pc_MPa','Tau_MPa']
+            f_0 = []
+            f_1 = []
+            f_2 = []
+            f_3 = []
+            f_4 = []
+            f_5 = []
+            #nodex = np.asarray(self.nodes)
+            for i in range(0,6): #skip boundary node at np.inf
                 #add colors
-                p_0 += [i]
-                p_1 += [self.pipes.typ[i]]
-                p_2 += [qs[i]]
-                p_3 += [self.pipes.W[i]]
-                p_4 += [self.pipes.L[i]]
-                p_5 += [self.pipes.Dh[i]*1000]
-                p_6 += [self.pipes.Dh_max[i]*1000]
-                p_7 += [self.pipes.frict[i]]
-        #vtk file
-        p_col = [p_0,p_1,p_2,p_3,p_4,p_5,p_6,p_7]
-        sg.writeVtk(p_obj, p_col, p_lab, vtkFile=(fname + '_flow.vtk'))
+                f_0 += [i]
+                f_1 += [self.faces[i].ci]
+                f_2 += [self.faces[i].typ]
+                f_3 += [self.faces[i].sn/MPa]
+                f_4 += [self.faces[i].Pc/MPa]
+                f_5 += [self.faces[i].tau/MPa]
+                #add geometry
+                f_obj += [HF(r=0.5*self.faces[i].dia, x0=self.faces[i].c0, strikeRad=self.faces[i].str, dipRad=self.faces[i].dip, h=0.01*r)]
+            #vtk file
+            f_col = [f_0,f_1,f_2,f_3,f_4,f_5]
+            sg.writeVtk(f_obj, f_col, f_lab, vtkFile=(fname + '_bounds.vtk'))
 
     def build_pts(self,spacing=25.0,fname='test_gridx'):
         print( '*** constructing temperature grid ***')
@@ -1627,7 +1806,7 @@ class mesh:
     def x_well_all_faces(self,plot=True,sourceID=0,targetID=[],offset=[]): #, path_type=0, aperture=0.22, roughness=80.0): #[x0,y0,zo,len,azn,dip]
         #scaled visual offset
         if not(offset):
-            offset = np.max([5.0*self.nodes.tol,0.010*self.rock.size])*np.asarray([0.0,0.0,1.0])
+            offset = np.max([5.0*self.nodes.tol,0.010*self.rock.size])*np.asarray([0.58,0.58,0.58])
             
     
         #working array for finding and logging intersection points
@@ -1694,7 +1873,7 @@ class mesh:
             rs = []
             rs = np.linalg.norm(x_well-c0,axis=1)
             a = rs.argsort()
-            #first element well-well link (a live end)
+            #first element well (a live end)
             self.add_flowpath(c0,
                              x_well[a[0]] + offset,
                              rs[a[0]],
@@ -1707,18 +1886,17 @@ class mesh:
             #intersection points
             i = 0
             for i in range(0,len(rs)-1):
-                #updated code
-                #well-well links (+1.0 z offset to prevent non-real links from fracture to well without a choke)
-                self.add_flowpath(x_well[a[i]] + offset,
-                                  x_well[a[i+1]] + offset,
-                                  rs[a[i+1]]-rs[a[i]],
-                                  dia,
-                                  lty,
-                                  sourceID,
-                                  Dh=dia,
-                                  Dh_max=dia,
-                                  frict=self.wells[sourceID].rgh)
-                #well-choke links (circumference of well * 3.0 * diameter = near well flow channel area dimensions, otherwise properties of the fracture)
+                # #well-well links (+1.0 z offset to prevent non-real links from fracture to well without a choke)
+                # self.add_flowpath(x_well[a[i]] + offset,
+                #                   x_well[a[i+1]] + offset,
+                #                   rs[a[i+1]]-rs[a[i]],
+                #                   dia,
+                #                   lty,
+                #                   sourceID,
+                #                   Dh=dia,
+                #                   Dh_max=dia,
+                #                   frict=self.wells[sourceID].rgh)
+                #choke (circumference of well * 3.0 * diameter = near well flow channel area dimensions, otherwise properties of the fracture)
                 self.add_flowpath(x_well[a[i]] + offset,
                                  x_well[a[i]], # + offset*0.5,
                                  #3.0*dia,
@@ -1729,8 +1907,8 @@ class mesh:
                                  i_frac[a[i]],
                                  Dh=self.faces[i_frac[a[i]]].bh,
                                  Dh_max=self.faces[i_frac[a[i]]].bh,
-                                 frict=self.rock.f_roughness)
-                #choke-fracture-center links (use intercept to center length, but fix width to y at 1/2 cirle radius)
+                                 frict=self.faces[i_frac[a[i]]].roughness)
+                #fracture (use intercept to center length, but fix width to y at 1/2 cirle radius)
                 self.add_flowpath(x_well[a[i]], # + offset*0.5,
                                  o_frac[a[i]],
                                  np.linalg.norm(o_frac[a[i]]-(x_well[a[i]])), #+offset*0.5)),
@@ -1739,12 +1917,22 @@ class mesh:
                                  i_frac[a[i]],
                                  Dh=self.faces[i_frac[a[i]]].bh,
                                  Dh_max=self.faces[i_frac[a[i]]].bh,
-                                 frict=self.rock.f_roughness)
+                                 frict=self.faces[i_frac[a[i]]].roughness)
+                #well continued (+1.0 z offset to prevent non-real links from fracture to well without a choke)
+                self.add_flowpath(x_well[a[i]] + offset,
+                                  x_well[a[i+1]] + offset,
+                                  rs[a[i+1]]-rs[a[i]],
+                                  dia,
+                                  lty,
+                                  sourceID,
+                                  Dh=dia,
+                                  Dh_max=dia,
+                                  frict=self.wells[sourceID].rgh)
                 #store fracture centerpoint node number
                 ck, cki = self.nodes.add(o_frac[a[i]])
                 self.faces[i_frac[a[i]]].ci = cki
                 
-            #last segment well-choke link
+            #last segment choke
             self.add_flowpath(x_well[a[-1]] + offset,
                              x_well[a[-1]], # + offset*0.5,
                              #3.0*dia,
@@ -1755,8 +1943,8 @@ class mesh:
                              i_frac[a[-1]],
                              Dh=self.faces[i_frac[a[-1]]].bh,
                              Dh_max=self.faces[i_frac[a[-1]]].bh,
-                             frict=self.rock.f_roughness)
-            #last segment choke-fracture link
+                             frict=self.faces[i_frac[a[-1]]].roughness)
+            #last segment fracture
             self.add_flowpath(x_well[a[-1]],# + offset*0.5,
                              o_frac[a[-1]],
                              np.linalg.norm(o_frac[a[-1]]-(x_well[a[-1]])), #+offset*0.5)),
@@ -1765,7 +1953,7 @@ class mesh:
                              i_frac[a[i]],
                              Dh=self.faces[i_frac[a[-1]]].bh,
                              Dh_max=self.faces[i_frac[a[-1]]].bh,
-                             frict=self.rock.f_roughness)
+                             frict=self.faces[i_frac[a[-1]]].roughness)
             #dead end segment
             self.add_flowpath(x_well[a[-1]] + offset,
                               c1,
@@ -1921,7 +2109,7 @@ class mesh:
                                      sourceID,
                                      Dh=self.faces[sourceID].bh,
                                      Dh_max=self.faces[sourceID].bh,
-                                     frict=self.rock.f_roughness)
+                                     frict=self.faces[sourceID].roughness)
                     #intersection midpoint to target-center
                     p_1, p_2 = self.add_flowpath(xMid,
                                      c02,
@@ -1931,7 +2119,7 @@ class mesh:
                                      targetID,
                                      Dh=self.faces[targetID].bh,
                                      Dh_max=self.faces[targetID].bh,
-                                     frict=self.rock.f_roughness)
+                                     frict=self.faces[targetID].roughness)
                     #store fracture centerpoint node number
                     if p_2 >= 0:
                         self.faces[targetID].ci = p_2
@@ -1949,7 +2137,7 @@ class mesh:
                                      sourceID,
                                      Dh=self.faces[sourceID].bh,
                                      Dh_max=self.faces[sourceID].bh,
-                                     frict=self.rock.f_roughness)
+                                     frict=self.faces[sourceID].roughness)
                     #intersection midpoint to far-field
                     p_1, p_2 = self.add_flowpath(xMid,
                                      self.nodes.r0,
@@ -1959,7 +2147,7 @@ class mesh:
                                      targetID,
                                      Dh=self.faces[targetID].bh,
                                      Dh_max=self.faces[targetID].bh,
-                                     frict=self.rock.f_roughness)
+                                     frict=self.faces[targetID].roughness)
                     #store fracture centerpoint node number
                     if p_2 >= 0:
                         self.faces[targetID].ci = p_2
@@ -2029,7 +2217,7 @@ class mesh:
             #Fracture parameters
             #dia = np.random.uniform(f_dia[0],f_dia[1])
             logmu = 0.5*(np.log10(f_dia[0])+np.log10(f_dia[1]))
-            dia = lognorm_trunc(1,logmu,logmu,np.log10(f_dia[0]),np.log10(f_dia[1]))
+            dia = lognorm_trunc(1,logmu,logmu,np.log10(f_dia[0]),np.log10(f_dia[1]))[0] #!!!
             azn = np.random.uniform(f_azn[0],f_azn[1])
             dip = np.random.uniform(f_dip[0],f_dip[1])
             #Build geometry
@@ -2156,11 +2344,13 @@ class mesh:
             wells = []
             azn, dip = azn_dip(i1s[0],i2s[0])
             for i in range(0,seg):
-                wells += [line(i1s[i][0],i1s[i][1],i1s[i][2],leg,azn,dip,'injector',self.rock.ra,self.rock.rgh)]
+                wells += [line(i1s[i][0],i1s[i][1],i1s[i][2],leg,azn,dip,'injector',
+                               self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]
             #place production wells
             for i in range(0,num):
                 azn, dip = azn_dip(p1s[i],p2s[i])
-                wells += [line(p1s[i][0],p1s[i][1],p1s[i][2],pLen,azn,dip,'producer',self.rock.ra,self.rock.rgh)]
+                wells += [line(p1s[i][0],p1s[i][1],p1s[i][2],pLen,azn,dip,'producer',
+                               self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]
             #add to model domain
             self.wells = wells
 
@@ -2283,14 +2473,6 @@ class mesh:
             s2 = state.s # kJ/kg-K
             x2 = state.x # steam quality
             v2 = state.v # m3/kg
-            # Turbine Flow Stream (2s)
-            state = therm(P=P2,x=1)
-            P2s = state.P # MPa
-            h2s = state.h #kJ/kg
-            T2s = state.T # K
-            s2s = state.s # kJ/kg-K
-            x2s = state.x # steam quality
-            v2s = state.v # m3/kg
             # Brine Flow Stream (2l)
             state = therm(P=P2,x=0)
             P2l = state.P # MPa
@@ -2299,16 +2481,40 @@ class mesh:
             s2l = state.s # kJ/kg-K
             x2l = state.x # steam quality
             v2l = state.v # m3/kg
-            # Turbine Outflow (3s)
-            P3s = self.rock.AmbPres
-            s3s = s2s
-            state = therm(P=P3s,s=s3s)
-            P3s = state.P # MPa
-            h3s = state.h #kJ/kg
-            T3s = state.T # K
-            s3s = state.s # kJ/kg-K
-            x3s = state.x # steam quality
-            v3s = state.v # m3/kg
+            #turbine with error handling
+            P3s = self.rock.AmbPres/MPa
+            if x2 > 0.0:
+                # Turbine Flow Stream (2s)
+                state = therm(P=P2,x=1)
+                P2s = state.P # MPa
+                h2s = state.h #kJ/kg
+                T2s = state.T # K
+                s2s = state.s # kJ/kg-K
+                x2s = state.x # steam quality
+                v2s = state.v # m3/kg
+                # Turbine Outflow (3s)
+                s3s = s2s
+                state = therm(P=P3s,s=s3s)
+                P3s = state.P # MPa
+                h3s = state.h #kJ/kg
+                T3s = state.T # K
+                s3s = state.s # kJ/kg-K
+                x3s = state.x # steam quality
+                v3s = state.v # m3/kg
+            else:
+                P2s = state.P # MPa
+                h2s = state.h #kJ/kg
+                T2s = state.T # K
+                s2s = state.s # kJ/kg-K
+                x2s = state.x # steam quality
+                v2s = state.v # m3/kg
+                # Turbine Outflow (3s)
+                P3s = state.P # MPa
+                h3s = state.h #kJ/kg
+                T3s = state.T # K
+                s3s = state.s # kJ/kg-K
+                x3s = state.x # steam quality
+                v3s = state.v # m3/kg
             # Condenser Outflow (4s)
             P4s = P3s
             T4s = T5
@@ -2360,7 +2566,7 @@ class mesh:
             TBil = np.min([T2l,T2])
             PBil = P2l
             hBil = np.min([h2l,h2])
-            # Binary thermal-electric efficiency
+            # Binary thermal-electric efficiency (estimated from Heberle and Bruggermann, 2010 - Fig. 4 - doi:10.1016/j.applthermaleng.2010.02.012)
             nBs = np.max([0.0, 0.0899*TBis - 25.95])/100.0
             nBl = np.max([0.0, 0.0899*TBil - 25.95])/100.0
             Binary = (ms*nBs*np.max([0.0, hBis-hBo]) + ml*nBl*np.max([0.0, hBil-hBo]))*effic #kW, power produced from binary cycle
@@ -2496,7 +2702,8 @@ class mesh:
         if useprior and not(reinit):
             h = self.nodes.p/(rho*g)
         else:
-            h = 1.0*np.random.rand(N) + p_bound/(rho*g)
+            #h = 1.0*np.random.rand(N) + p_bound/(rho*g) #!!! older than 2/11/23
+            h = (1.0*MPa/(rho*g))*np.random.rand(N) + p_bound/(rho*g)
         q = np.zeros(N)
         
         #install boundary condition
@@ -2515,10 +2722,10 @@ class mesh:
         hlo = -101.4/(rho*g)
         
         #convergence
-        goal = 0.0001
+        goal = 1.0e-8 #0.0001
         
         #dimension limiters for flow solver stability
-        self.pipes.Dh_limit(Qnom,goal*rho*g,rho,g,mu,self.rock.Frack)
+        self.pipes.Dh_limit(Qnom,goal*rho*g,rho,g,mu,self.rock.kf)
         
         #hydraulic resistance terms
         for i in range(0,Np):
@@ -2527,11 +2734,12 @@ class mesh:
             
             #pipes and wells
             if (int(self.pipes.typ[i]) in [typ('injector'),typ('producer'),typ('pipe')]): #((Y[i][2] == 0): #pipe, Hazen-Williams
-                self.pipes.Dh[i] = np.min([self.pipes.Dh_max[i],self.wells[u].ra]) #!!! perhaps better to use self.pipes.W[i]?                 
-                K[i] = 10.7*self.pipes.L[i]/(self.pipes.frict[i]**1.852*self.pipes.Dh[i]**4.87) #metric (m)
-                # K[i] = 10.7*self.pipes.L[i]/(self.wells[u].rgh**1.852*self.wells[u].ra**4.87) #metric (m)
+                self.pipes.Dh[i] = np.min([self.pipes.Dh_max[i],self.wells[u].ra]) #!!! perhaps better to use self.pipes.W[i]?
+                Lscaled = self.pipes.L[i]*mu/(0.9*cP)
+                K[i] = 10.7*Lscaled/(self.pipes.frict[i]**1.852*self.pipes.Dh[i]**4.87) #metric (m)
+                # K[i] = 10.7*self.pipes.L[i]/(self.pipes.frict[i]**1.852*self.pipes.Dh[i]**4.87) #metric (m) #old 2/11/23
+                # K[i] = 10.7*self.pipes.L[i]/(self.wells[u].rgh**1.852*self.wells[u].ra**4.87) #metric (m) #oldest
                 n[i] = 1.852
-
             #fractures and planes
             elif (int(self.pipes.typ[i]) in [typ('boundary'),typ('fracture'),typ('propped'),typ('choke')]): #(int())Y[i][2] == 1: #fracture, effective cubic law
                 self.pipes.Dh[i] = np.min([self.pipes.Dh_max[i],self.faces[u].bh])
@@ -2541,7 +2749,7 @@ class mesh:
             #porous media
             elif (int(self.pipes.typ[i]) in [typ('darcy')]):
                 self.pipes.Dh[i] = np.min([self.pipes.Dh_max[i],self.faces[u].bd])
-                K[i] = mu*self.pipes.L[i]/(rho*g*self.pipes.Dh[i]*self.pipes.W[i]*self.rock.Frack)
+                K[i] = mu*self.pipes.L[i]/(rho*g*self.pipes.Dh[i]*self.pipes.W[i]*self.rock.kf)
                 # K[i] = mu*self.pipes.L[i]/(rho*g*self.faces[u].bd*self.pipes.W[i]*self.rock.Frack)
                 n[i] = 1.0
             #type not handled
@@ -2556,20 +2764,22 @@ class mesh:
         iters = 0
         max_iters = 50
         z = h
-        #add jitters
-        h += 2.0*goal*np.random.rand(N)-goal
+        # #add jitters #!!! commented out trying to get low pressure convergence
+        # h += 2.0*goal*np.random.rand(N)-goal
         while 1:
+            # #debugging #!!!
+            # print('... error: %.6e' %(np.max(np.abs(z))))
+            # print(h*rho*g)
+            
             #loop breaker
             iters += 1
             if iters > max_iters:
                 print( '-> Flow solver halted with error of <%.2e m head after %i iterations' %(np.max(np.abs(z)),iters-1))
                 break
-            elif np.max(np.abs(z)) < goal: #np.max(np.abs(z/(h+z))) < goal:
+            elif (np.max(np.abs(z)) < goal): #np.max(np.abs(z/(h+z))) < goal:
                 print( '-> Flow solver converged to <%.2e m head using %i iterations' %(goal,iters-1))
                 break
             
-            #!!! jitters was here
-
             #re-initialize working variables
             F = np.zeros(N)
             F += q
@@ -2605,9 +2815,9 @@ class mesh:
             #solve matrix equations
             z = solve(D[:,:],F[:])
             
-            #apply correction limiters to prevent excess overshoot
-            z[z > zlim] = zlim
-            z[z < -zlim] = -zlim
+            # #apply correction limiters to prevent excess overshoot
+            # z[z > zlim] = zlim
+            # z[z < -zlim] = -zlim
             
             #update pressures
             for i in range(0,len(H)):
@@ -3067,16 +3277,16 @@ class mesh:
         
         #mixed produced enthalpy and mass flow rate
         p_mm = []
-        p_hm = np.zeros(len(ht))
+        p_hm = np.zeros(len(ts))
         p_mm = 0.0
         for i in iPro:
             i = int(i)
             p_mm += w_m[i]
             p_hm += w_h[i]*w_m[i]
-        if p_mm < 0: #!!! error handling for zero production
+        if p_mm < 0: 
             p_hm = p_hm/p_mm
         else:
-            p_hm = hr
+            p_hm = np.ones(len(ts))*hr
         self.p_mm = p_mm #mixed produced mass flow rate
         self.p_hm = p_hm #mixed produced enthalpy
                 
@@ -3136,7 +3346,7 @@ class mesh:
         self.b_m = b_m
         
         #calculate power output
-        self.get_power(detail=detail) #!!!
+        self.get_power(detail=detail)
         
         #thermal energy extraction
         dht = np.zeros(len(ts),dtype=float)
@@ -3186,7 +3396,8 @@ class mesh:
     def dyn_stim(self,Vinj = -1.0, Qinj = -1.0, dpp = -666.6*MPa,
                       sand = -1.0, leakoff = -1.0,
                       target=0, perfs=-1, r_perf=-1.0,
-                      visuals = True, fname = 'stim'):
+                      visuals = True, fname = 'stim',
+                      pfinal_max = 999.9*MPa):
         print( '*** dynamic stim module ***')
         #fetch defaults
         if perfs < 0:
@@ -3203,6 +3414,8 @@ class mesh:
             Vinj = self.rock.Vinj
         if Qinj < 0:
             Qinj = self.rock.Qinj
+        if pfinal_max > 999.0*MPa:
+            pfinal_max = self.rock.pfinal_max
         Qinj
             
         #user status update
@@ -3242,14 +3455,14 @@ class mesh:
         Pis = [] #Pa
         Qis = [] #m3/s
         completed = np.zeros(i_div,dtype=bool) #T/F segment stim complete
-        hydrofrac = np.zeros(i_div,dtype=bool) #T/F hydrofrac instability detection
+        # hydrofrac = np.zeros(i_div,dtype=bool) #T/F hydrofrac instability detection
         stabilize = np.zeros(i_div,dtype=bool) #T/F detection of stable flow
         tip = np.ones(i_div,dtype=float)*bhp #trial injection pressure
         dpi = np.ones(i_div,dtype=float)*-self.rock.dPi #trial pressure 
         
-        #check if injectors were already hydrofraced #!!!
-        for i in range(0,i_div):
-            hydrofrac[i] = self.wells[i_key[i]].hydrofrac
+        # #check if injectors were already hydrofraced #!!!
+        # for i in range(0,i_div):
+        #     hydrofrac[i] = self.wells[i_key[i]].hydrofrac
         
         #if target is specified
         if target.any():
@@ -3266,7 +3479,8 @@ class mesh:
             #time variable properties
             self.faces[i].Pmax = bhp
             self.faces[i].Pcen = bhp
-            self.GR_bh(i)
+            # self.GR_bh(i)
+            self.hydromech(i)
             if typ(self.faces[i].typ) != 'boundary':
                 vol_ini += (4.0/3.0)*pi*0.25*self.faces[i].dia**2.0*0.5*self.faces[i].bd
         vol_old = vol_ini
@@ -3313,7 +3527,7 @@ class mesh:
             #solve flow with pressure drive
             self.get_flow(p_bound=bhp,p_well=p_well,q_well=q_well,Qnom=Qinj)
             
-            #fetch pressure and flow rates #!!! this may need updating
+            #fetch pressure and flow rates
             Pis += [tip]
             Qi = []
             for i in range(0,i_div):
@@ -3323,19 +3537,19 @@ class mesh:
             #create vtk
             if visuals:
                 fname2 = fname + '_A_%i' %(iters)
-                self.build_vtk(fname2)
+                self.build_vtk(fname2,vtype=[0,0,1,1,1,0])
                 
             #stimulation complete if pressure driven injection rate exceeds stimulation injection rate in all wells
             #i_q, p_q, b_q are + for flow into the frac network
             for i in range(0,i_div):
                 if Qi[i] > Qinj:
                     completed[i] = True
-                    stabilize[i] = True
+                    #stabilize[i] = True #!!!
             
             #break if all are compeleted
             if np.sum(completed) == i_div:
                 print( '-> stimulation complete: full flow acheived')
-                break     
+                break
                 
             #get max pressure on each fracture from all the nodes associated with that fracture
             face_pmax = np.ones(len(self.faces),dtype=float)*bhp
@@ -3356,20 +3570,22 @@ class mesh:
                 self.faces[i].Pmax = face_pmax[i]
                 self.faces[i].Pcen = self.nodes.p[self.faces[i].ci]
                 #compute fracture properties, if stimulated acknowledge it
-                nat_stim += self.GR_bh(i)
+                # nat_stim += self.GR_bh(i)
+                nat_stim += self.hydromech(i)
                 #calculate new fracture volume
                 if typ(self.faces[i].typ) != 'boundary':
                     vol_new += (4.0/3.0)*pi*0.25*self.faces[i].dia**2.0*0.5*self.faces[i].bd
                 #get maximum number of stimulations
                 num_stim = np.max([self.faces[i].stim,num_stim])
-                #identify if hydrofrac
-                if self.faces[i].hydroprop:
-                    #hydrofrac = True
-                    for j in range(0,i_div):
-                        #only record for intervals that are hydropropped
-                        if not(completed[j]):
-                            hydrofrac[j] = True
-                            self.wells[i_key[j]].hydrofrac = True #!!!
+                
+                # #identify if fracture is hydroprop
+                # if self.faces[i].hydroprop:
+                #     #hydrofrac = True
+                #     for j in range(0,i_div):
+                #         #only record for intervals that are hydropropped
+                #         if not(completed[j]):
+                #             hydrofrac[j] = True
+                #             self.wells[i_key[j]].hydrofrac = True
                 #variable tracking for visuals
                 if visuals:
                     R += [0.5*self.faces[i].dia]
@@ -3386,14 +3602,13 @@ class mesh:
             if visuals:
                 t = []
                 P = []
-            print( '   - volume remaining')
             for i in range(0,i_div):
                 #only modify stimualtions if stage is not yet completed                
                 if not(completed[i]):
                     #calculate volume change before next fracture in chain will be triggered
                     time_step = (vol_new-vol_old)/(Qinj-Qi[i])
                     vol_rem[i] = vol_rem[i] - time_step*Qinj
-                    print( '   - (%i) volume remaining %.3f m3' %(i,vol_rem[i]))
+                    print( '   - (%i) volume remaining %.3e m3' %(i,vol_rem[i]))
                     
                     #stage complete if target volume is reached
                     if vol_rem[i] < 0.0:
@@ -3402,9 +3617,9 @@ class mesh:
                         
                     #stimulate hydraulic fractures if criteria met
                     #if (nat_stim == False) and (tip > self.rock.s3+0.1*MPa) and (hydrofrac == False): #and (np.max(self.p_p) < 0.0):
-                    elif (hydrofrac[i] == False) and (tip[i] > (self.rock.s3 + self.rock.hfmcc)):
+                    elif (self.wells[i_key[i]].hydrofrac == False) and (tip[i] > (self.rock.s3 + self.rock.hfmcc)):
                         print( '   ! (%i) hydraulic fractures' %(i))
-                        hydrofrac[i] = True
+                        #hydrofrac[i] = True
                         self.wells[i_key[i]].hydrofrac = True #!!!
                         #seed hydraulic fracture
                         self.gen_stimfracs(target=i_key[i],perfs=perfs,
@@ -3421,7 +3636,7 @@ class mesh:
                     #if insufficient pressure and insufficient rate or too many repeated stimulations, increase pressure
                     elif ((nat_stim == False) or (((int(num_stim) + 1) % int(self.rock.stim_limit)) == 0)):
                         dpi[i] += self.rock.dPi
-                        print( '   + (%i) pressure increased to %.3f' %(i,self.rock.s3+dpi[i]))
+                        print( '   + (%i) pressure increased to %.3f, %.3f absolute' %(i,self.rock.s3+dpi[i],tip[i]+dpi[i]))
                     if visuals:
                         t += [time_step]
                         P += [tip[i]]
@@ -3441,16 +3656,20 @@ class mesh:
         for i in range(0,len(self.faces)):
             self.faces[i].Pmax = bhp
             self.faces[i].Pcen = bhp
-            self.GR_bh(i,fix=True)
+            # self.GR_bh(i,fix=True)
+            self.hydromech(i,fix=True)
         
         #***** final pressure calculation to set facture apertures
-        print( '{Pressure boundary conditions with stimulation disabled -> get fracture apertures}')
+        print( '1: Pressure boundary conditions with stimulation disabled -> get fracture apertures')
         #fixed pressure solve
         q_well = np.full(len(self.wells),None)
         p_well = np.full(len(self.wells),None)
         #set injection boundary conditions using maximum values
         for i in range(0,i_div):
             tip[i] = self.rock.s3 + dpi[i]
+            #limit pressure if commanded to do so
+            if tip[i] > pfinal_max:
+                tip[i] = pfinal_max
             p_well[i_key[i]] = tip[i]
         #set production boundary conditions
         for i in range(0,p_div):
@@ -3458,6 +3677,10 @@ class mesh:
             
         #solve flow
         self.get_flow(p_bound=bhp,p_well=p_well,q_well=q_well,reinit=False,Qnom=Qinj)
+        if visuals:
+            fname2 = fname + '_B1'
+            self.build_vtk(fname2,vtype=[0,0,1,1,1,0])        
+        
         #get max pressure on each fracture from all the nodes associated with that fracture
         face_pmax = np.ones(len(self.faces),dtype=float)*bhp
         for i in range(0,self.pipes.num):
@@ -3469,15 +3692,31 @@ class mesh:
             self.faces[i].Pmax = face_pmax[i]
             self.faces[i].Pcen = self.nodes.p[self.faces[i].ci]
             #compute fracture properties
-            self.GR_bh(i,fix=True)
+            # self.GR_bh(i,fix=True)
+            self.hydromech(i,fix=True)
+        
+        #***** flag unstable hydropropped scenarios
+        #... if any fractures connected to the injector are hydropropped, stabilization is required 
+        #search by pipes (chokes give fracture id, connectors give well id)
+        for j in range(0,self.pipes.num):
+            #find the choke elements
+            if self.pipes.typ[j] == typ('choke'):
+                #get the well information
+                fID = self.pipes.fID[j]
+                wID = self.pipes.fID[j-1]
+                Qii = self.p_q[wID]
+                if (self.wells[wID].typ  == typ('injector')): # or (self.wells[wID].typ == typ('producer')):
+                    if (self.faces[fID].hydroprop):
+                        stabilize[wID] = True
         
         #***** flow rate solve for heat transfer solution
-        print( '{Flow boundary conditions with stimulation disabled -> get flow in network}')
+        print( '2: Flow boundary conditions with stimulation disabled -> get flow in network')
         q_well = np.full(len(self.wells),None)
         p_well = np.full(len(self.wells),None)
         #set injection boundary conditions using flow values, unless stable flow was never acheived (e.g., hydrofrac only)
         for i in range(0,i_div):
-            if stabilize[i]:
+            Qii = self.p_q[i_key[i]]
+            if (stabilize[i]) or (Qii > Qinj):
                 q_well[i_key[i]] = Qinj
             else:
                 p_well[i_key[i]] = tip[i]
@@ -3495,7 +3734,10 @@ class mesh:
             #locate injection node
             source = self.wells[i_key[i]].c0
             ck, j = self.nodes.add(source)
-            if stabilize[i] and hydrofrac[i]:
+            #bad solution if injection pressures are excessive
+            if self.nodes.p[j] > 1.05*tip[i]:
+                print('** ERROR: Pressures are excessive so final flow is invalid')
+            elif stabilize[i]:
                 self.nodes.p[j] = tip[i]
                 Pi += [tip[i]]
             else:
@@ -3509,7 +3751,7 @@ class mesh:
         Pis = np.asarray(Pis)
         if visuals:
             #create vtk with final flow data
-            fname2 = fname + '_B'
+            fname2 = fname + '_B2'
             self.build_vtk(fname2)
             self.v_Rs = Rs
             self.v_ts = ts
