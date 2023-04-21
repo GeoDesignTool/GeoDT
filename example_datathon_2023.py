@@ -160,7 +160,7 @@ for i in range(0,1):
     #generate natural fractures
     geom.gen_joint_sets() #!!!
     #### *** place 'known' deterministic fractures ***
-    if (len(data)>0):
+    if len(data>0):
         for f in range(0,len(data)):
             c0 = [c0s[0][f],c0s[1][f],c0s[2][f]]
             dia = dias[f]
