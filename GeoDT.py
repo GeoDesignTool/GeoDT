@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-print('GeoDT_3.8.3')
+print('GeoDT_4.0.0')
 
 # ****************************************************************************
 # Calculate economic potential of EGS & optimize borehole layout with caging
@@ -22,7 +22,8 @@ from iapws import IAPWS97 as therm
 from libs import SimpleGeometry as sg
 from scipy import stats
 #import sys
-# import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt
+import pandas as pd
 # import copy
 
 # ****************************************************************************
@@ -65,14 +66,17 @@ def HF(r,x0, strikeRad, dipRad, h=0.5):
 def typ(key):
     ret = []
     choices = np.asarray([
-            ['boundary', '-3'],
+            ['screen','-4'],
+            ['perfcluster','-3'],
             ['producer', '-2'],
             ['injector', '-1'],
             ['pipe', '0'],
             ['fracture', '1'],
             ['propped', '2'],
             ['darcy', '3'],
-            ['choke', '4']
+            ['choke', '4'],
+            ['perf', '5'],
+            ['boundary', '6']
             ])
     key = str(key)
     ret = np.where(choices == key)
@@ -91,6 +95,7 @@ def azn_dip(x0,x1):
     dy = x1[1] - x0[1]
     dz = x1[2] - x0[2]
     dr = (dx**2.0+dy**2.0)**0.5
+    dis = (dx**2.0+dy**2.0+dz**2.0)**0.5
     azn = []
     dip = []
     if dx == 0 and dy >= 0:
@@ -103,7 +108,7 @@ def azn_dip(x0,x1):
         dip = -np.sign(dz)*pi/2.0
     else:
         dip = -np.arctan(dz/dr)
-    return azn, dip
+    return azn, dip, dis
 
 def exponential_trunc(nsam,bval=1.0,Mmax=5.0,Mwin=1.0,prob=0.1): # random samples from a truncated exponential distribution
     # zero-centered Mcap
@@ -306,7 +311,9 @@ class cauchy: #functions modified from JPM
         ax = fig.add_subplot(111, projection='polar')
         ax.set_theta_zero_location("N")
         ax.set_theta_direction(-1)
-        pylab.pcolormesh(dip_dir_radians+np.pi,dip_angle_deg,np.ma.masked_where(np.isnan(criticalDelPpG),criticalDelPpG), vmin=110.0*MPa, vmax=150.0*MPa,cmap='rainbow_r') #vmin=0.0*MPa, vmax=self.SH,cmap='rainbow_r')
+        pylab.pcolormesh(dip_dir_radians,dip_angle_deg,np.ma.masked_where(np.isnan(criticalDelPpG),criticalDelPpG), 
+                        #vmin=110.0*MPa, vmax=150.0*MPa,cmap='rainbow_r') #vmin=0.0*MPa, vmax=self.SH,cmap='rainbow_r')
+                        vmin=self.Sh*0.5, vmax=np.max([self.SV,self.SH]),cmap='rainbow_r')
         ax.grid(True)
         ax.set_rgrids([0,30,60,90],labels=[])
         ax.set_thetagrids([0,90,180,270])
@@ -314,18 +321,97 @@ class cauchy: #functions modified from JPM
         ax.set_title("Critical pressure for Mohr-Coulomb failure", va='bottom')
         pylab.savefig(filename, format='png',dpi=png_dpi)
         pylab.close()
+    #convert vector to strike and dip
+    def vnorm_to_strdip(self,vnorm=np.asarray([0.0,0.0,0.0])):
+        dr = (vnorm[0]**2.0+vnorm[1]**2.0)**0.5
+        azn = []
+        dip = []
+        if vnorm[0] == 0 and vnorm[1] >= 0:
+            azn = 0.0
+        elif vnorm[0] == 0:
+            azn = np.pi
+        else:
+            azn = np.sign(vnorm[0])*np.arccos(vnorm[1]/dr) + (1 - np.sign(vnorm[0]))*np.pi
+        if dr == 0.0:
+            dip = -np.sign(vnorm[2])*np.pi/2.0
+        else:
+            dip = -np.arctan(vnorm[2]/dr)
+        if dip < 0:
+            dip = -dip
+            azn = azn + np.pi
+        azn = azn + np.pi/2
+        dip = np.pi/2 - dip
+        if azn >= 2.0*np.pi:
+            azn = azn - 2.0*np.pi
+        elif azn < 0:
+            azn = azn + 2.0*np.pi
+        return [azn, dip]
+    #critical orientations
+    def get_conjugates(self,plots=False):
+        # Working variables
+        phi = 30.0*deg
+        mcc = 1.0*MPa
+        nRad=18
+        dip_angle_deg = np.asarray(range(nRad+1))*(90.0/nRad)
+        nTheta=72
+        dip_dir_radians = np.asarray(range(nTheta+1))*(2.0*np.pi/nTheta)
+        # Calculate critical dP3
+        dP3 = [1e10,0,0] #global minimum
+        criticalDelPpG=np.zeros([nRad,nTheta])
+        for i in range(nRad):
+            for j in range(nTheta):
+                # Convert the x and y into a normal to the fracture using dip angle and dip direction
+                nrmG=self.normal_from_dip(dip_dir_radians[j], dip_angle_deg[i]*deg)
+                nrmx,nrmy,nrmz=nrmG[0],nrmG[1],nrmG[2]
+                criticalDelPpG[i,j], h1, h2 = self.Pc(np.asarray([nrmx,nrmy,nrmz]), phi, mcc)
+                if dP3[0] > criticalDelPpG[i,j]:
+                    dP3 = [criticalDelPpG[i,j], i, j]
+        azn = dip_dir_radians[dP3[2]]
+        dip = np.pi/2 - dip_angle_deg[dP3[1]]*deg
+        v_dP3 = np.asarray([np.sin(azn)*np.cos(-dip), np.cos(azn)*np.cos(-dip), np.sin(-dip)])            
+        # Rotate about shmin to get dP2
+        v_sh = np.asarray([np.sin(self.Sh_azn)*np.cos(-self.Sh_dip), np.cos(self.Sh_azn)*np.cos(-self.Sh_dip), np.sin(-self.Sh_dip)])
+        v_dP2 = np.dot(self.rotationMatrix(v_sh, np.pi),v_dP3)
+        # Calculate dP1 using cross product of dP
+        v_dP1 = np.cross(v_dP3,v_dP2)
+        v_dP1 = v_dP1/np.linalg.norm(v_dP1)
+        # Convert to strike and dip
+        str_dip = np.asarray([self.vnorm_to_strdip(v_dP3),
+                              self.vnorm_to_strdip(v_dP2),
+                              self.vnorm_to_strdip(v_dP1)])
+        # Plot critical slip pressure (lower hemisphere projection)
+        if plots:
+            fig = pylab.figure(figsize=(6,4.75),dpi=128,tight_layout=True,facecolor='w',edgecolor='k')
+            ax = fig.add_subplot(111, projection='polar')
+            ax.set_theta_zero_location("N")
+            ax.set_theta_direction(-1)
+            pylab.pcolormesh(dip_dir_radians,dip_angle_deg,np.ma.masked_where(np.isnan(criticalDelPpG),criticalDelPpG), 
+                            #vmin=110.0*MPa, vmax=150.0*MPa,cmap='rainbow_r') #vmin=0.0*MPa, vmax=self.SH,cmap='rainbow_r')
+                            vmin=self.Sh*0.5, vmax=np.max([self.SV,self.SH]),cmap='rainbow_r')
+            ax.plot(dip_dir_radians[dP3[2]],dip_angle_deg[dP3[1]],'om')
+            ax.plot(str_dip[0,0]-np.pi/2,str_dip[0,1]/deg,'or')
+            ax.plot(str_dip[:,0]-np.pi/2,str_dip[:,1]/deg,'.k')
+            ax.grid(True)
+            ax.set_rgrids([0,30,60,90],labels=[])
+            ax.set_thetagrids([0,90,180,270])
+            pylab.colorbar()
+            ax.set_title("Critical pressure for Mohr-Coulomb failure", va='bottom')
+            pylab.savefig('check.png', format='png',dpi=128)
+            pylab.close()
+        return str_dip
         
 #reservoir object
 class reservoir:
     def __init__(self):
         #rock properties
-        self.size = 800.0 #m
+        self.size = 1000.0 #m
+        self.gradient = True #toggle temperature variance in the reservoir
         self.ResDepth = 6000.0 # m
-        self.ResGradient = 50.0 #56.70 # C/km; average = 25 C/km
+        self.ResGradient = 60.0 #56.70 # C/km; average = 25 C/km
         self.ResRho = 2700.0 # kg/m3
         self.ResKt = 2.5 # W/m-K
         self.ResSv = 2063.0 # kJ/m3-K
-        self.AmbTempC = 25.0 # C
+        self.AmbTempC = 0.0 # C
         self.AmbPres = 0.101*MPa #Example: 0.01 MPa #Atmospheric: 0.101 # MPa
         self.ResE = 50.0*GPa
         self.Resv = 0.3
@@ -334,21 +420,8 @@ class reservoir:
         self.Ks2 = 0.75 # 0.75
         self.s3Azn = 0.0*deg
         self.s3AznVar = 0.0*deg
-        self.s3Dip = 0.0*deg
-        self.s3DipVar = 0.0*deg
-        #fracture orientation parameters #[i,:] set, [0,0:2] min, max --or-- nom, std
-        self.fNum = np.asarray([10,
-                                10,
-                                10],dtype=int) #count 
-        self.fDia = np.asarray([[300.0,900.0],
-                                [300.0,900.0],
-                                [300.0,900.0]],dtype=float) #m
-        self.fStr = np.asarray([[79.0*deg,8.0*deg],
-                                [0.0*deg,8.0*deg],
-                                [180.0*deg,8.0*deg]],dtype=float) #m
-        self.fDip = np.asarray([[60.0*deg,8.0*deg],
-                                [90.0*deg,8.0*deg],
-                                [0.0*deg,8.0*deg]],dtype=float) #m
+        self.s3Dip = 0.5*deg
+        self.s3DipVar = 0.5*deg
         #fracture hydraulic parameters
         self.gamma = np.asarray([10.0**-3.0,10.0**-2.0,10.0**-1.2])
         self.n1 = np.asarray([1.0,1.0,1.0])
@@ -364,16 +437,16 @@ class reservoir:
         self.f_roughness = np.asarray([0.80,0.90,1.00])
         #well parameters
         self.w_count = 3 #wells
-        self.w_spacing = 200.0 #m
+        self.w_spacing = 400.0 #m
         self.w_length = 800.0 #m
-        self.w_azimuth = self.s3Azn + 0.0*deg #rad
-        self.w_dip = self.s3Dip + 0.0*deg #rad
-        self.w_proportion = 0.8 #m/m
+        self.w_azimuth = self.s3Azn + np.random.uniform(-30.0,30.0)*deg #rad
+        self.w_dip = self.s3Dip + np.random.uniform(-30.0,30.0)*deg #rad
+        self.w_proportion = 0.6 #m/m
         self.w_phase = -45.0*deg #rad
         self.w_toe = 0.0*deg #rad
         self.w_skew = 15.0*deg #rad
-        self.w_intervals = 5 #breaks in well length
-        self.ra = 0.0254*3.0 #0.0254*3.0 #m
+        self.w_intervals = 1 #breaks in well length
+        self.ra = 0.0254*6.0 #0.0254*3.0 #m
         self.rb = self.ra + 0.0254*0.5 # m
         self.rc = self.ra + 0.0254*1.0 # m
         self.rgh = 80.0
@@ -382,8 +455,6 @@ class reservoir:
         self.CemSv = 2000.0 # kJ/m3-K
         #thermal-electric power parameters
         self.GenEfficiency = 0.85 # kWe/kWt
-#        self.InjPres = 1.0 #Example: 0.135 #Model: 2.0 # MPa
-#        self.TargetPower = 1000 #Example: 2964 # kWe
         self.LifeSpan = 20.5*yr #years
         self.TimeSteps = 41 #steps
         self.p_whp = 1.0*MPa #Pa
@@ -405,16 +476,31 @@ class reservoir:
         #cauchy stress
         self.stress = cauchy()
         self.stress.set_sigG_from_Principal(self.s3, self.s2, self.s1, self.s3Azn, self.s3Dip)
-#        self.stress.plot_Pc(30.0*deg,5.0*MPa)
+        #conjugate fractures, [i,:] set, [0,0:2] min, max --or-- nom, std
+        str_dip = self.stress.get_conjugates(plots=False)
+        self.fNum = np.asarray([int(np.random.uniform(40,80)),
+                                int(np.random.uniform(20,40)),
+                                int(np.random.uniform(10,20))],dtype=int) #count
+        self.fDia = np.asarray([[100.0,1000.0],
+                                [100.0,1000.0],
+                                [100.0,1000.0]],dtype=float) #m
+        self.fStr = np.asarray([[str_dip[0,0],7.0*deg],
+                                     [str_dip[1,0],7.0*deg],
+                                     [str_dip[2,0],7.0*deg,]],dtype=float) #m
+        self.fDip = np.asarray([[str_dip[0,1],5.0*deg],
+                                     [str_dip[1,1],5.0*deg,],
+                                     [str_dip[2,1],5.0*deg]],dtype=float) #m
         #stimulation parameters
-        self.perf = 1
-        self.r_perf = 50.0 #m
-        self.sand = 0.3 #sand ratio in frac fluid by volume
+        self.perf_clusters = 6
+        self.perf_dia = 0.013 #m
+        self.perf_per_cluster = 6
+        self.r_perf = 0.2*self.w_spacing #m
+        self.sand = 0.045 #sand ratio in frac fluid by volume
         self.leakoff = 0.0 #Carter leakoff
         self.dPp = -2.0*MPa #production well pressure drawdown
         self.dPi = 0.5*MPa 
         self.stim_limit = 5
-        self.Qinj = 0.01 #m3/s
+        self.Qinj = 0.10 #m3/s
         self.Vinj = self.Qinj*self.LifeSpan
         self.Qstim = 0.04 #m3/s
         self.Vstim = 50000.0 #m3
@@ -434,9 +520,15 @@ class reservoir:
         self.s2 = self.Ks2*(self.s1-self.BH_P)+self.BH_P #Pa
         self.s3 = self.Ks3*(self.s1-self.BH_P)+self.BH_P #Pa
         self.stress.set_sigG_from_Principal(self.s3, self.s2, self.s1, self.s3Azn, self.s3Dip)
+        str_dip = self.stress.get_conjugates(plots=False)
+        self.fStr = np.asarray([[str_dip[0,0],7.0*deg],
+                                     [str_dip[1,0],7.0*deg],
+                                     [str_dip[2,0],7.0*deg,]],dtype=float) #m
+        self.fDip = np.asarray([[str_dip[0,1],5.0*deg],
+                                     [str_dip[1,1],5.0*deg,],
+                                     [str_dip[2,1],5.0*deg]],dtype=float) #m
+        self.r_perf = 0.2*self.w_spacing #m
         self.Vinj = self.Qinj*self.LifeSpan
-        #self.rb = self.ra + 0.0254*0.5 # m
-        #self.rc = self.ra + 0.0254*1.0 # m
         
 #surface object
 class surf:
@@ -539,53 +631,6 @@ class surf:
         #error case
         if self.Pc <= self.sn:
             print('         *** error: solution gives closed supercritical shear instead of hydrofracture')
-    #adjust frictional properties to prevent runaway stimulation at specified conditions (attempts to get more reasonable friction angle or more reasonable cohesion... but doesn't work well)
-    def check_integrity_old(self,rock=reservoir(),pres=0.0):
-        #tensile stability
-        mcc_t = pres - self.sn
-        #low shear stress stability
-        mcc_s = self.tau - (self.sn - pres)*np.tan(self.phi)
-        #high shear stress stability
-        phi_s = np.arctan((self.tau - self.mcc)/(self.sn - pres))
-        #shear failure critical angle
-        if (pres < self.sn) and (self.mcc < self.tau):
-            mcc_crit = 0.0
-            phi_crit = phi_s
-        #tensile failure critical cohesion
-        else:
-            mcc_crit = np.max([mcc_t,mcc_s])
-            phi_crit = 0.0
-        #update fracture properties to attain stability at the input conditions
-        Pc0 = self.Pc
-        mcc0 = self.mcc
-        phi0 = self.phi
-        self.phi = np.max([self.phi,phi_crit])
-        self.mcc = np.max([self.mcc,mcc_crit])
-        #recompute critical conditions
-        self.Pc, self.sn, self.tau = rock.stress.Pc_frac(self.str, self.dip, self.phi, self.mcc)
-        #output message
-        if self.Pc > Pc0:
-            print('alert: critical fracture at Tau = %.2e, sn = %.2e, and Pp %.2e having mcc = %.2e Pa, phi = %.2e rad, Pc = %.2e Pa adjusted to phi = %.2e rad, mcc = %.2e Pa, Pc = %.2e Pa'
-                  %(self.tau,self.sn,pres,mcc0,phi0,Pc0,self.phi,self.mcc,self.Pc))
-        
-        
-        # if (pres >= self.sn):
-        #     phi_crit = 0.0 #use originally-specified phi
-        #     mcc_crit = pres - self.sn + 1000.0 #1 kPa added to prevent numerical instabilities 
-        # #low stress fractures cause calculated critical friction angles to be excessive so mcc must be modified instead
-        # elif (self.tau <= self.mcc):
-        #     phi_crit = 0.0 #use originally-specified phi
-        #     mcc_crit = self.tau - (self.sn - pres)*np.tan(self.phi)
-        # #high shear & high stress fractures are stable as a function of phi, but low phi can cause runaway stimulation 
-        # else:
-        #     pass
-        # phi_crit = np.arctan((self.tau-self.mcc+0.5*rock.dPi)/(self.sn-pres))
-        # if self.phi < phi_crit:
-        #     self.phi = phi_crit
-        #     self.mcc = mcc_crit
-        #     self.Pc, self.sn, self.tau = rock.stress.Pc_frac(self.str, self.dip, self.phi, self.mcc)
-        #     print('alert: a fracture was critically weak and adjusted to phi = %.2f' %(phi_crit))
-        #     print('-- new Pc = %.3e Pa' %(self.Pc))
        
 #line objects
 class line:
@@ -598,9 +643,9 @@ class line:
         self.dip = dip #axis dip from horizontal
         self.typ = typ(w_type) #type of well
         #flow geometry
-        self.ra = ra #m
-        self.rb = rb #m
-        self.rc = rc #m
+        self.ra = ra #radius, m
+        self.rb = rb #radius, m
+        self.rc = rc #radius, m
         self.rgh = rough
         #stimulation traits
         self.hydrofrac = False #was well already hydrofraced?
@@ -618,6 +663,7 @@ class nodes:
         self.p = np.zeros(self.num,dtype=float)
         self.T = np.zeros(self.num,dtype=float)
         self.h = np.zeros(self.num,dtype=float)
+        self.Tr = np.zeros(self.num,dtype=float)
 #        self.f_id = [[-1]]
     #add a node
     def add(self,c=np.asarray([0.0,0.0,0.0])): #,f_id=-1):
@@ -640,6 +686,7 @@ class nodes:
             self.p = np.concatenate((self.p,np.asarray([0.0])),axis=0)
             self.T = np.concatenate((self.T,np.asarray([0.0])),axis=0)
             self.h = np.concatenate((self.h,np.asarray([0.0])),axis=0)
+            self.Tr = np.concatenate((self.Tr,np.asarray([0.0])),axis=0)
 #            self.f_id += [[f_id]]
             return True, len(self.all)-1
 
@@ -660,6 +707,7 @@ class pipes:
         self.Dh_max = [] #hydraulic aperture/diameter limit
         self.frict = [] #hydraulic roughness
         self.hydrofraced = False #tracker for fracture initiation
+        self.R0 = [] #thermal radius
     #add a pipe
     def add(self, n0, n1, length, width, featTyp, featID, Dh=1.0, Dh_max=1.0, frict=1.0):
         self.n0 += [n0]
@@ -674,22 +722,22 @@ class pipes:
         self.Dh += [Dh]
         self.Dh_max += [Dh_max]
         self.frict += [frict]
+        self.R0 += [0.0]
         self.hydrofraced = False
     #set hydraulic aperture limits based on minimum pressure drop at target flow rate
     def Dh_limit(self,Q,dP,rho=980.0,g=9.81,mu=0.9*cP,k=0.1*mD):
         for i in range(0,self.num):
-            if (int(self.typ[i]) in [typ('injector'),typ('producer'),typ('pipe')]):
-                #a_max = (10.7e-5*self.L[i]*rho*g*Q/(dP*self.frict[i]**1.852))**(1.0/4.87) #oldest
-                #a_max = (10.7e-4*self.L[i]*rho*g*Q/(dP*self.frict[i]**1.852))**(1.0/4.87) #old 2/11/23
+            if (int(self.typ[i]) in [typ('injector'),typ('producer'),typ('pipe'),typ('perfcluster'),typ('screen')]):
                 Lscaled = self.L[i]*mu/(0.9*cP)
                 a_max = (10.7e-4*Lscaled*rho*g*Q/(dP*self.frict[i]**1.852))**(1.0/4.87)
                 self.Dh_max[i] = a_max
             elif (int(self.typ[i]) in [typ('boundary'),typ('fracture'),typ('propped'),typ('choke')]):
-                #bh_max = (12.0e-5*mu*Q*self.L[i]/(dP*self.W[i]))**(1.0/3.0)
                 bh_max = (12.0e-4*mu*Q*self.L[i]/(dP*self.W[i]))**(1.0/3.0)
                 self.Dh_max[i] = bh_max
+            elif (int(self.typ[i]) in [typ('perf')]):
+                dp_max = (4.0e-4*mu*rho*Q**2.0/(0.9*cP*dP*self.frict[i]**2.0*0.825**2.0))**(0.25)
+                self.Dh_max[i] = dp_max
             elif (int(self.typ[i]) in [typ('darcy')]):
-                #t_max = 1.0e-5*Q*mu*self.L[i]/(k*self.W[i]*dP)
                 t_max = 1.0e-4*Q*mu*self.L[i]/(k*self.W[i]*dP)
                 self.Dh_max[i] = t_max
             else:
@@ -715,8 +763,8 @@ class mesh:
         self.Q = [] #boundary flow rate array, m3/s
         self.q = [] #calculated pipe flow rates
         self.v5 = [] #calculated inlet specific volume, m3/kg
-        self.i_p = [] #constant flow well pressures, Pa
-        self.i_q = [] #constant flow well rates, m3/s
+        # self.i_p = [] #constant flow well pressures, Pa
+        # self.i_q = [] #constant flow well rates, m3/s
         self.p_p = [] #constant pressure well pressures, Pa
         self.p_q = [] #constant pressure well rates, m3/s
         self.b_p = [] #boundary pressure, Pa
@@ -746,6 +794,8 @@ class mesh:
         self.Bout = [] #binary isobutane power out
         self.Qout = [] #pumping power out
         self.Pout = [] #net power out
+        self.Tout = [] #bulk power out
+        self.Hout = [] #thermal power out
         self.dhout = [] #heat extraction
         #validation stuff
         self.v_Rs = []
@@ -755,7 +805,24 @@ class mesh:
         self.v_Vs = []
         self.v_Pn = []
         #economics
-        self.NPV = 0.0
+        self.sales_kWh = 0.1372 #$/kWh - customer electricity retail price                  
+        self.drill_m = 2763.06 #$/m - Lowry et al, 2017 large diameter well baseline
+        self.pad_fixed = 590e3 #$ Lowry et al, 2017 large diameter well baseline
+        self.plant_kWe = 2025.65 #$/kWe simplified from GETEM model 
+        self.explore_m = 2683.41 #$/m simplified from GETEM model
+        self.oper_kWh = 0.03648 #$/kWh simplified from GETEM model
+        self.quake_coef = 2e-4 #$/Mw for $300M Mw 5.5 quake Pohang (Westaway, 2021) & $17.2B Mw 6.3 quake Christchurch (Swiss Re)
+        self.quake_exp = 5.0 #$/Mw for $300M Mw 5.5 quake Pohang (Westaway, 2021) & $17.2B Mw 6.3 quake Christchurch (Swiss Re)
+        self.eNPV = 0.0 #net present value
+        self.eC = 0.0 #capital cost
+        self.eQ = 0.0 #quake cost
+        self.eG = 0.0 #generation cost
+        self.eP = 0.0 #net power sales
+        self.eB = 0.0 #bulk power sales
+        self.CpM_elec = 0.0 #cost per net MWe-h
+        self.CpM_prod = 0.0 #cost per produced MWe-h
+        self.CpM_ther = 0.0 #cost per MWt-h
+        self.drill_length = 0.0 #total drilled length
 
 #    # Static per-fracture hydraulic resistance terms using method of Luke P. Frash; [lower,nominal,upper]
 #    # .... also calculates the stress states on the fractutres
@@ -926,136 +993,6 @@ class mesh:
         
         #return true if stimulated
         return stim
-
-    # # L - d - M - k Gutenberg-Richter based aperture stimulation
-    # def GR_bh(self, f_id, fix=False): #, pp=-666.0):
-    #     #initialize stim
-    #     stim = False
-        
-    #     #check if fracture will be stimulated
-    #     if (self.faces[f_id].Pmax >= self.faces[f_id].Pc):
-    #         self.faces[f_id].stim += 1
-    #         stim = True
-    #         print( '-> fracture stimulated: %i' %(f_id))
-
-    #     #fracture parameters
-    #     f_radius = 0.5*self.faces[f_id].dia
-        
-    #     #pressures for analysis
-    #     e_max = self.faces[f_id].sn - self.faces[f_id].Pmax
-        
-        
-    #             self.prop_load = 0.0 #m3 #absolute proppant volume
-    #             self.prop_alpha = rock.prop_alpha #proppant compressibility modulus
-        
-        
-    #     #stimulation disabled
-    #     if not(stim) or fix:
-    #         bd0 = self.faces[f_id].bd0
-    #         #if open
-    #         if (e_max < 0.0):
-    #             #maximum aperture from Sneddon's (PKN) penny fracture aperture
-    #             bd = (-8.0*e_max*(1.0-self.rock.Resv**2.0)*f_radius)/(pi*self.rock.ResE) #m
-    #             #hydraulic aperture
-    #             bh = bd*self.rock.f_roughness #m
-    #             #add bd0 for equation continuity
-    #             bd = bd + bd0
-    #             bh = bh + bd0*self.faces[f_id].u_N
-    #             #note that fracture is hydropropped
-    #             self.faces[f_id].hydroprop = True
-    #         #if closed
-    #         else:
-    #             #stress closure
-    #             bd = bd0 * np.exp(-self.faces[f_id].u_alpha*e_max)
-    #             #hydraulic aperture
-    #             bh = bd * self.faces[f_id].u_N
-    #             #note that fracture is closed
-    #             self.faces[f_id].hydroprop = False
-    #     #stimulation enabled
-    #     else:
-    #         #*** shear component ***
-    #         #don't let shear be zero
-    #         if self.faces[f_id].tau < 1.0:
-    #             self.faces[f_id].tau = 1.0
-    #         #maximum moment (shear stress method)
-    #         #M0max = self.faces[f_id].tau*(0.25*np.pi*self.faces[f_id].dia**2.0)**(3.0/2.0)
-    #         M0max = self.faces[f_id].tau*self.faces[f_id].arup**(3.0/2.0)
-    #         Mwmax = (np.log10(M0max)-9.1)/1.5
-    #         #mw sample from G-R
-    #         mw = exponential_trunc(1,bval=self.rock.bval,Mmax=Mwmax,Mwin=1.0,prob=0.1)[0]
-    #         #convert to moment magnitude (Mo)
-    #         mo = 10.0**(mw * 1.5 + 9.1)
-    #         # rupture length
-    #         Lr = (4*((mo/self.faces[f_id].tau)**(2/3))/np.pi)**0.5
-    #         # intermediate variables
-    #         ds = mo / ((0.25*np.pi*Lr**2.0) * self.rock.ResG)
-    #         d0 = 0.5 * self.faces[f_id].u_gamma * (self.faces[f_id].dia ** self.faces[f_id].u_n1)
-    #         bd0 = self.faces[f_id].u_a * (d0 ** self.faces[f_id].u_b)
-    #         d1 = d0 + ds
-    #         bd1 = self.faces[f_id].u_a * (d1 ** self.faces[f_id].u_b)
-    #         dbd = bd1- bd0
-    #         #record stimulation magnitude and correct for seismic overestimation
-    #         self.faces[f_id].Mws += [mw]
-    #         #add to zero-stress dilatant aperture
-    #         bd0 = self.faces[f_id].bd0 + dbd
-            
-    #         #*** tensile component ***
-    #         #if open
-    #         if (e_max < 0.0):
-    #             #maximum aperture from Sneddon's (PKN) penny fracture aperture
-    #             bd = (-8.0*e_max*(1.0-self.rock.Resv**2.0)*f_radius)/(pi*self.rock.ResE) #m
-    #             #hydraulic aperture
-    #             bh = bd*self.rock.f_roughness #m
-    #             #add bd0 for equation continuity
-    #             bd = bd + bd0
-    #             bh = bh + bd0*self.faces[f_id].u_N
-    #             #note that fracture is hydropropped
-    #             self.faces[f_id].hydroprop = True
-    #             #override rupture length with full length
-    #             Lr = self.faces[f_id].dia
-    #         #if closed
-    #         else:
-    #             #stress closure
-    #             #bd = bd0 * np.exp(-self.faces[f_id].u_alpha*e_cen) #!!!
-    #             bd = bd0 * np.exp(-self.faces[f_id].u_alpha*e_max)
-    #             #hydraulic aperture
-    #             bh = bd * self.faces[f_id].u_N
-    #             #note that fracture is closed
-    #             self.faces[f_id].hydroprop = False
-            
-    #         #*** growth ***
-    #         #grow fracture by larger of 20% fracture size or 5% domain size #!!!
-    #         add_dia = np.max([0.2*self.faces[f_id].dia,0.05*self.rock.size])
-    #         #deduct event's rupture area from residual rupture area
-    #         self.faces[f_id].arup = np.max([self.faces[f_id].arup - 0.25*np.pi*Lr**2.0,  0.1])           
-    #         #update rupture area
-    #         self.faces[f_id].arup = self.faces[f_id].arup + 0.25*np.pi*((self.faces[f_id].dia + add_dia)**2.0 - self.faces[f_id].dia**2.0)
-    #         #update fracture diameter
-    #         self.faces[f_id].dia += add_dia
-                
-    #     # #limiters for flow solver stability #!!! limiters removed 02/13/23
-    #     # if bh < self.rock.bh_min:
-    #     #     bh = self.rock.bh_min
-    #     #     # print( '-> Alert: bh at min')
-    #     # elif bh > self.rock.bh_max:
-    #     #     bh = self.rock.bh_max
-    #     #     # print( '-> Alert: bh at max')
-        
-    #     #override for boundary fractures
-    #     if (int(self.faces[f_id].typ) in [typ('boundary')]):
-    #         bh = self.rock.bh_bound
-        
-    #     #volume
-    #     vol = (4.0/3.0)*pi*0.25*self.faces[f_id].dia**2.0*0.5*bd
-
-    #     #update fracture properties
-    #     self.faces[f_id].bd = bd
-    #     self.faces[f_id].bh = bh
-    #     self.faces[f_id].vol = vol
-    #     self.faces[f_id].bd0 = bd0
-        
-    #     #return true if stimulated
-    #     return stim
     
     def save(self,fname='input_output.txt',pin='',aux=[],printwells=0,time=True):
         out = []
@@ -1065,6 +1002,7 @@ class mesh:
         #input parameters
         r = self.rock
         out += [['size',r.size]]
+        out += [['gradient',r.gradient]]
         out += [['ResDepth',r.ResDepth]]
         out += [['ResGradient',r.ResGradient]]
         out += [['ResRho',r.ResRho]]
@@ -1143,7 +1081,9 @@ class mesh:
         out += [['s1',r.s1]]
         out += [['s2',r.s2]]
         out += [['s3',r.s3]]
-        out += [['perf',r.perf]]
+        out += [['perf_clusters',r.perf_clusters]]
+        out += [['perf_dia',r.perf_dia]]
+        out += [['perf_per_cluster',r.perf_per_cluster]]
         out += [['r_perf',r.r_perf]]
         out += [['sand',r.sand]]
         # out += [['leakoff',r.leakoff]]
@@ -1162,29 +1102,58 @@ class mesh:
             out += [['mcc%i' %(i),r.mcc[i]]]
         out += [['hfmcc',r.hfmcc]]
         out += [['hfphi',r.hfphi]]
+        out += [['sales_kWh',self.sales_kWh]]
+        out += [['drill_m',self.drill_m]]
+        out += [['pad_fixed',self.pad_fixed]]
+        out += [['plant_kWe',self.plant_kWe]]
+        out += [['explore_m',self.explore_m]]
+        out += [['oper_kWh',self.oper_kWh]]
+        out += [['quake_coef',self.quake_coef]]
+        out += [['quake_exp',self.quake_exp]]
+        out += [['NPV',self.eNPV]]
+        out += [['CapitalCost',self.eC]]
+        out += [['QuakeRisk',self.eQ]]
+        out += [['GenerationCost',self.eG]]
+        out += [['NetSales',self.eP]]
+        out += [['MaxSales',self.eB]]
+        out += [['CpM_net',self.CpM_elec]]
+        out += [['CpM_gro',self.CpM_prod]]
+        out += [['CpM_the',self.CpM_ther]]
+        out += [['drill_length',self.drill_length]]
         
-        #auxillary printed inputs & outputs #!!!
+        #auxillary printed inputs & outputs
         if aux:
             out += aux
+            
+        #compile well types
+        wtyp = np.zeros(len(self.wells))
+        for i in range(0,len(wtyp)):
+            wtyp[i] = self.wells[i].typ
         
         #total injection rate (+ in)
         qinj = 0.0
-        key = np.where(np.asarray(self.i_q)>0.0)[0]
-        for i in key:
-            qinj += self.i_q[i]
+        # key = np.where(np.asarray(self.i_q)>0.0)[0]
+        # for i in key:
+        #     if wtyp[i] < 0:
+        #         qinj += self.i_q[i]
         key = np.where(np.asarray(self.p_q)>0.0)[0]
         for i in key:
-            qinj += self.p_q[i]
+            # if wtyp[i] < 0:
+            if (int(wtyp[i]) in [typ('injector')]):
+                qinj += self.p_q[i]
         out += [['qinj',qinj]]
         
         #total production rate (-out)
         qpro = 0.0
-        key = np.where(np.asarray(self.i_q)<0.0)[0]
-        for i in key:
-            qpro += self.i_q[i]
+        # key = np.where(np.asarray(self.i_q)<0.0)[0]
+        # for i in key:
+        #     if wtyp[i] < 0:
+        #         qpro += self.i_q[i]
         key = np.where(np.asarray(self.p_q)<0.0)[0]
         for i in key:
-            qpro += self.p_q[i]
+            # if wtyp[i] < 0:
+            if (int(wtyp[i]) in [typ('producer')]):
+                qpro += self.p_q[i]
         out += [['qpro',qpro]]
         
         #total leakoff rate (-out)
@@ -1217,8 +1186,7 @@ class mesh:
         out += [['max_quake',quake]]
         
         #injection pressure
-        # pinj = np.max(np.asarray(self.p_p))/MPa
-        pinj = np.max(self.nodes.p)/MPa
+        pinj = (np.max(self.nodes.p) - r.BH_P - r.dPp + r.p_whp)/MPa
         out += [['pinj',pinj]]
         
         #injection enthalpy
@@ -1232,13 +1200,13 @@ class mesh:
             hinj = 0.0
         out += [['hinj',hinj]]
         
-        #injection specific volume #!!!
+        #injection specific volume
         out += [['v5',self.v5]]
         
         #injection intercepts
         ixint = 0
         for i in range(0,self.pipes.num):
-            if (int(self.pipes.typ[i]) in [typ('injector')]):
+            if (int(self.pipes.typ[i]) in [typ('injector'),typ('perfcluster')]):
                 ixint += 1
         ixint = ixint - self.rock.w_intervals
         out += [['ixint',ixint]]
@@ -1246,7 +1214,7 @@ class mesh:
         #production intercepts
         pxint = 0
         for i in range(0,self.pipes.num):
-            if (int(self.pipes.typ[i]) in [typ('producer')]):
+            if (int(self.pipes.typ[i]) in [typ('producer'),typ('screen')]):
                 pxint += 1
         pxint = pxint - self.rock.w_count
         out += [['pxint',pxint]]
@@ -1275,31 +1243,12 @@ class mesh:
         
         #flash power
         Pout = []
-        if self.Pout == []:
+        if len(self.Pout) < 1:
             Pout = np.full(len(self.ts),np.nan)
         else:
             Pout = self.Pout
         for t in range(0,len(self.ts)-1):
             out += [['Pout:%.3f' %(self.ts[t]/yr),Pout[t]]]
-
-        # #binary power
-        # Bout = []
-        # if self.Bout == []:
-        #     Bout = np.full(len(self.ts),np.nan)
-        # else:
-        #     Bout = self.Bout
-        # for t in range(0,len(self.ts)-1):
-        #     out += [['Bout:%.3f' %(self.ts[t]/yr),Bout[t]]]
-            
-        # #thermal energy extraction
-        # dhout = []
-        # self.dhout = np.asarray(self.dhout)
-        # if not self.dhout.any():
-        #     dhout = np.full(len(self.ts),np.nan)
-        # else:
-        #     dhout = self.dhout
-        # for t in range(0,len(self.ts)-1):
-        #     out += [['dhout:%.3f' %(self.ts[t]/yr),dhout[t]]]
         
         #per well values
         if (printwells != 0) and (self.w_m.any()):
@@ -1533,7 +1482,7 @@ class mesh:
             p_obj = [] #pipes
             p_col = [] #pipes colors
             p_lab = [] #pipes color labels
-            p_lab = ['Pipe_Number','Type','Pipe_Flow_Rate_m3_s','Height_m','Length_m','Hydraulic_Aperture_mm','Max_Aperture_mm','Friction']
+            p_lab = ['Pipe_Number','Type','Pipe_Flow_Rate_m3_s','Height_m','Length_m','Hydraulic_Aperture_mm','Max_Aperture_mm','Friction','ThermRadius_m']
             p_0 = []
             p_1 = []
             p_2 = []
@@ -1542,6 +1491,7 @@ class mesh:
             p_5 = []
             p_6 = []
             p_7 = []
+            p_8 = []
             qs = np.asarray(self.q)
             if not qs.any():
                 qs = np.zeros(self.pipes.num)
@@ -1562,8 +1512,9 @@ class mesh:
                     p_5 += [self.pipes.Dh[i]*1000]
                     p_6 += [self.pipes.Dh_max[i]*1000]
                     p_7 += [self.pipes.frict[i]]
+                    p_8 += [self.pipes.R0[i]]
             #vtk file
-            p_col = [p_0,p_1,p_2,p_3,p_4,p_5,p_6,p_7]
+            p_col = [p_0,p_1,p_2,p_3,p_4,p_5,p_6,p_7,p_8]
             sg.writeVtk(p_obj, p_col, p_lab, vtkFile=(fname + '_flow.vtk'))
 
         #******   paint boundaries   ******
@@ -1605,7 +1556,11 @@ class mesh:
         ss = [spacing,spacing,spacing]
         
         #initialize data to initial rock temperature
+        #data = np.ones((num,num,num),dtype=float)*self.rock.BH_T
         data = np.ones((num,num,num),dtype=float)*self.rock.BH_T
+        if self.rock.gradient:
+            for i in range(0,num):
+                data[:,:,i] = data[:,:,i] + (size - spacing*i) * self.rock.ResGradient * 1e-3
         
         #seek temperature drawdown
         for i in range(0,self.pipes.num):
@@ -1617,10 +1572,36 @@ class mesh:
             T1 = self.nodes.T[self.pipes.n1[i]]
             c0 = 0.5*(x0+x1)
             r0 = 0.5*np.linalg.norm(x1-x0)
-            R0 = self.R0[i]
+            #R0 = self.R0[i]
+            R0 = self.pipes.R0[i]
+            Tr0 = self.nodes.Tr[self.pipes.n0[i]]
+            Tr1 = self.nodes.Tr[self.pipes.n1[i]]
             #pipes and wells
-            if (int(self.pipes.typ[i]) in [typ('injector'),typ('producer'),typ('pipe')]): #((Y[i][2] == 0): #pipe, Hazen-Williams
-                pass
+            if (int(self.pipes.typ[i]) in [typ('injector'),typ('producer'),typ('pipe'),typ('perfcluster'),typ('screen')]): #pipe, Hazen-Williams
+                #well info
+                dip = self.wells[self.pipes.fID[i]].dip #dip
+                azn = self.wells[self.pipes.fID[i]].azn #azimuth
+                vAxi = np.asarray([math.sin(azn)*math.cos(-dip),math.cos(azn)*math.cos(-dip),math.sin(-dip)]) #axial vector
+                rc = self.wells[self.pipes.fID[i]].rc #azimuth
+                #cycle thruogh all points
+                for x in range(0,len(data)):
+                    for y in range(0,len(data[0])):
+                        for z in range(0,len(data[0,0])):
+                            #point coordinates
+                            xPt = np.asarray([o0[0]+x*spacing, o0[1]+y*spacing, o0[2]+z*spacing])
+                            #spherical radius vector
+                            pi = xPt-c0
+                            #lengthwise distance along well
+                            li = np.linalg.norm(np.dot(pi,vAxi))
+                            #radial distance from well
+                            ri = ((np.linalg.norm(pi))**2.0 - li**2.0)**0.5
+                            #if within length and thermal radius
+                            if (li < r0) and (ri < R0) and (ri > rc):
+                                #subtract delta T at point based on distance of point versus thermal radius
+                                data[x,y,z] = data[x,y,z] + (0.5*(T1+T0-Tr1-Tr0))*(1.0-(np.log(rc/ri)/np.log(rc/R0)))
+                            elif (li < r0) and (ri <= rc):
+                                data[x,y,z] = data[x,y,z] + (0.5*(T1+T0-Tr1-Tr0))
+                
             #fractures and planes
             elif (int(self.pipes.typ[i]) in [typ('fracture'),typ('propped'),typ('choke')]): #(int())Y[i][2] == 1: #fracture, effective cubic law
                 #fracture info
@@ -1716,7 +1697,7 @@ class mesh:
         #self.static_KQn()
         return self
 
-    def set_bcs(self,p_bound=0.0*MPa,q_well=[],p_well=[]):
+    def set_bcs(self,p_bound=0.0*MPa,q_well=[],p_well=[],auto_farfield=True):
         #working variables
         rho = self.rock.PoreRho #kg/m3
         #input & output boundaries
@@ -1742,9 +1723,12 @@ class mesh:
                 elif p_well[w] != None:
                     self.H += [[i, p_well[w]/(rho*g)]]
                 #default to outer boundary condition if no boundary condition is explicitly stated
-                else:
+                elif auto_farfield:
                     self.H += [[i, p_bound/(rho*g)]]
                     print( 'warning: a well was assigned the far-field pressure boundary condition')
+                else:
+                    #do nothing
+                    pass
             else:
                 print( 'error: flow boundary point not identified')
 
@@ -1796,19 +1780,12 @@ class mesh:
         self.pipes.add(so_n, ta_n, length, width, featTyp, featID, Dh, Dh_max, frict)
         return so_n, ta_n
         
-    #intersections of lines with lines
-    def x_well_wells():
-        pass
-        
-        
-        
     #intersections of a line with a plane
     def x_well_all_faces(self,plot=True,sourceID=0,targetID=[],offset=[]): #, path_type=0, aperture=0.22, roughness=80.0): #[x0,y0,zo,len,azn,dip]
         #scaled visual offset
         if not(offset):
             offset = np.max([5.0*self.nodes.tol,0.010*self.rock.size])*np.asarray([0.58,0.58,0.58])
             
-    
         #working array for finding and logging intersection points
         x_well = [] #intercept coord
         o_frac = [] #surface origin
@@ -1820,22 +1797,33 @@ class mesh:
         leg = self.wells[sourceID].leg #line length
         azn = self.wells[sourceID].azn #line azimuth
         dip = self.wells[sourceID].dip #line dip
-        dia = self.wells[sourceID].ra #line inner diameter
+        dia = 2.0*self.wells[sourceID].ra #line inner diameter
         lty = self.wells[sourceID].typ #line type
         vAxi = np.asarray([math.sin(azn)*math.cos(-dip),math.cos(azn)*math.cos(-dip),math.sin(-dip)])
         cm = c0 + 0.5*leg*vAxi #line midpoint
         c1 = c0 + leg*vAxi #line endpoint
         
-        #for all target faces
-        for targetID in range(0,len(self.faces)):
+        #skip intersections for sealed pipe
+        if (int(lty) in [typ('pipe')]):
+            #add endpoint to endpoint
+            self.add_flowpath(c0,
+                             c1,
+                             leg,
+                             dia,
+                             lty,
+                             sourceID,
+                             Dh=dia,
+                             Dh_max=dia,
+                             frict=self.wells[sourceID].rgh)
+            return False
+        #for all target faces (except boundaries)
+        for targetID in range(6,len(self.faces)): #!!! changed with gradient
             #planar object parameters
             t0 = self.faces[targetID].c0 #face origin
             rad = 0.5*self.faces[targetID].dia #face diameter
             azn = self.faces[targetID].str #face strike
             dip = self.faces[targetID].dip #face dip
             fty = self.faces[targetID].typ #face type
-            #vDip = np.asarray([math.sin(azn+90.0*deg)*math.cos(-dip),math.cos(azn+90.0*deg)*math.cos(-dip),math.sin(-dip)])
-            #vAzn = np.asarray([math.sin(azn),math.cos(azn),0.0])
             vNor = np.asarray([math.sin(azn+90.0*deg)*math.sin(dip),math.cos(azn+90.0*deg)*math.sin(dip),math.cos(dip)])
             #infinite plane intersection point
             if np.dot(vNor,vAxi) != 0: #not parallel
@@ -1854,7 +1842,7 @@ class mesh:
         if len(x_well) == 0:
             #add endpoint to endpoint
             self.add_flowpath(c0,
-                             c1 + offset,
+                             c1,
                              leg,
                              dia,
                              lty,
@@ -1886,30 +1874,42 @@ class mesh:
             #intersection points
             i = 0
             for i in range(0,len(rs)-1):
-                # #well-well links (+1.0 z offset to prevent non-real links from fracture to well without a choke)
-                # self.add_flowpath(x_well[a[i]] + offset,
-                #                   x_well[a[i+1]] + offset,
-                #                   rs[a[i+1]]-rs[a[i]],
-                #                   dia,
-                #                   lty,
-                #                   sourceID,
-                #                   Dh=dia,
-                #                   Dh_max=dia,
-                #                   frict=self.wells[sourceID].rgh)
-                #choke (circumference of well * 3.0 * diameter = near well flow channel area dimensions, otherwise properties of the fracture)
-                self.add_flowpath(x_well[a[i]] + offset,
-                                 x_well[a[i]], # + offset*0.5,
-                                 #3.0*dia,
-                                 #math.pi*dia,
-                                 3.0*self.wells[sourceID].rc,
-                                 math.pi*self.wells[sourceID].rc,
-                                 typ('choke'),
-                                 i_frac[a[i]],
-                                 Dh=self.faces[i_frac[a[i]]].bh,
-                                 Dh_max=self.faces[i_frac[a[i]]].bh,
-                                 frict=self.faces[i_frac[a[i]]].roughness)
+                #cased well = perforate
+                if (int(lty) in [typ('perfcluster')]):
+                    #perforation 
+                    self.add_flowpath(x_well[a[i]] + offset,
+                                     x_well[a[i]] + 0.5*offset,
+                                     self.wells[sourceID].rc-self.wells[sourceID].ra,
+                                     self.rock.perf_dia,
+                                     typ('perf'),
+                                     sourceID,
+                                     Dh=self.rock.perf_dia,
+                                     Dh_max=self.rock.perf_dia,
+                                     frict=self.rock.perf_per_cluster)
+                    #choke
+                    self.add_flowpath(x_well[a[i]] + 0.5*offset,
+                                     x_well[a[i]],
+                                     3.0*self.wells[sourceID].rc,
+                                     math.pi*self.wells[sourceID].rc,
+                                     typ('choke'),
+                                     i_frac[a[i]],
+                                     Dh=self.faces[i_frac[a[i]]].bh,
+                                     Dh_max=self.faces[i_frac[a[i]]].bh,
+                                     frict=self.faces[i_frac[a[i]]].roughness)
+                #uncased = no perforation
+                else:
+                    #choke (circumference of well * 3.0 * diameter = near well flow channel area dimensions, otherwise properties of the fracture)
+                    self.add_flowpath(x_well[a[i]] + offset,
+                                     x_well[a[i]],
+                                     3.0*self.wells[sourceID].rc,
+                                     math.pi*self.wells[sourceID].rc,
+                                     typ('choke'),
+                                     i_frac[a[i]],
+                                     Dh=self.faces[i_frac[a[i]]].bh,
+                                     Dh_max=self.faces[i_frac[a[i]]].bh,
+                                     frict=self.faces[i_frac[a[i]]].roughness)
                 #fracture (use intercept to center length, but fix width to y at 1/2 cirle radius)
-                self.add_flowpath(x_well[a[i]], # + offset*0.5,
+                self.add_flowpath(x_well[a[i]],
                                  o_frac[a[i]],
                                  np.linalg.norm(o_frac[a[i]]-(x_well[a[i]])), #+offset*0.5)),
                                  0.866*r_frac[a[i]],
@@ -1933,17 +1933,40 @@ class mesh:
                 self.faces[i_frac[a[i]]].ci = cki
                 
             #last segment choke
-            self.add_flowpath(x_well[a[-1]] + offset,
-                             x_well[a[-1]], # + offset*0.5,
-                             #3.0*dia,
-                             #math.pi*dia,
-                             3.0*self.wells[sourceID].rc,
-                             math.pi*self.wells[sourceID].rc,
-                             typ('choke'),
-                             i_frac[a[-1]],
-                             Dh=self.faces[i_frac[a[-1]]].bh,
-                             Dh_max=self.faces[i_frac[a[-1]]].bh,
-                             frict=self.faces[i_frac[a[-1]]].roughness)
+            #cased well = perforate
+            if (int(lty) in [typ('perfcluster')]):
+                #perforation 
+                self.add_flowpath(x_well[a[-1]] + offset,
+                                 x_well[a[-1]] + 0.5*offset,
+                                 self.wells[sourceID].rc-self.wells[sourceID].ra,
+                                 self.rock.perf_dia,
+                                 typ('perf'),
+                                 sourceID,
+                                 Dh=self.rock.perf_dia,
+                                 Dh_max=self.rock.perf_dia,
+                                 frict=self.rock.perf_per_cluster)
+                #choke
+                self.add_flowpath(x_well[a[-1]] + 0.5*offset,
+                                 x_well[a[-1]],
+                                 3.0*self.wells[sourceID].rc,
+                                 math.pi*self.wells[sourceID].rc,
+                                 typ('choke'),
+                                 i_frac[a[-1]],
+                                 Dh=self.faces[i_frac[a[-1]]].bh,
+                                 Dh_max=self.faces[i_frac[a[-1]]].bh,
+                                 frict=self.faces[i_frac[a[-1]]].roughness)
+            #uncased = no perforation
+            else:
+                #choke
+                self.add_flowpath(x_well[a[-1]] + offset,
+                                 x_well[a[-1]],
+                                 3.0*self.wells[sourceID].rc,
+                                 math.pi*self.wells[sourceID].rc,
+                                 typ('choke'),
+                                 i_frac[a[-1]],
+                                 Dh=self.faces[i_frac[a[-1]]].bh,
+                                 Dh_max=self.faces[i_frac[a[-1]]].bh,
+                                 frict=self.faces[i_frac[a[-1]]].roughness)
             #last segment fracture
             self.add_flowpath(x_well[a[-1]],# + offset*0.5,
                              o_frac[a[-1]],
@@ -1968,61 +1991,6 @@ class mesh:
             ck, cki = self.nodes.add(o_frac[a[i]])
             self.faces[i_frac[a[-1]]].ci = cki
             return True
-                
-            #     # #original code
-            #     #well-well links (+1.0 z offset to prevent non-real links from fracture to well without a choke)
-            #     self.add_flowpath(x_well[a[i]] + offset,
-            #                       x_well[a[i+1]] + offset,
-            #                       rs[a[i+1]]-rs[a[i]],
-            #                       dia,
-            #                       lty,
-            #                       sourceID)
-            #     #well-choke links (circumference of well * 3.0 * diameter = near well flow channel area dimensions, otherwise properties of the fracture)
-            #     self.add_flowpath(x_well[a[i]] + offset,
-            #                       x_well[a[i]] + offset*0.5,
-            #                       #3.0*dia,
-            #                       #math.pi*dia,
-            #                       3.0*self.wells[sourceID].rc,
-            #                       math.pi*self.wells[sourceID].rc,
-            #                       typ('choke'),
-            #                       i_frac[a[i]])
-            #     #choke-fracture-center links (use intercept to center length, but fix width to y at 1/2 cirle radius)
-            #     p_1, p_2 = self.add_flowpath(x_well[a[i]] + offset*0.5,
-            #                       o_frac[a[i]],
-            #                       np.linalg.norm(o_frac[a[i]]-(x_well[a[i]]+offset*0.5)),
-            #                       0.866*r_frac[a[i]],
-            #                       fty,
-            #                       i_frac[a[i]])
-            #     #store fracture centerpoint node number
-            #     if p_2 >= 0:
-            #         self.faces[i_frac[a[i]]].ci = p_2
-            # #last segment well-choke link
-            # self.add_flowpath(x_well[a[-1]] + offset,
-            #                  x_well[a[-1]] + offset*0.5,
-            #                  #3.0*dia,
-            #                  #math.pi*dia,
-            #                  3.0*self.wells[sourceID].rc,
-            #                  math.pi*self.wells[sourceID].rc,
-            #                  typ('choke'),
-            #                  i_frac[a[-1]])
-            # #last segment choke-fracture link
-            # p_1, p_2 = self.add_flowpath(x_well[a[-1]] + offset*0.5,
-            #                  o_frac[a[-1]],
-            #                  np.linalg.norm(o_frac[a[-1]]-(x_well[a[-1]]+offset*0.5)),
-            #                  0.866*r_frac[a[-1]],
-            #                  fty,
-            #                  i_frac[a[i]])
-            # #dead end segment
-            # self.add_flowpath(x_well[a[-1]] + offset,
-            #                   c1,
-            #                   np.linalg.norm(x_well[a[-1]]-c1), #,axis=1),
-            #                   dia,
-            #                   lty,
-            #                   sourceID)
-            # #store fracture centerpoint node number
-            # if p_2 >= 0:
-            #     self.faces[i_frac[a[-1]]].ci = p_2
-            # return True
     
     #intersections of a plane with a plane
     def x_frac_face(self,plot=True,sourceID=0,targetID=1): #[x0,y0,z0,dia,azn,dip]
@@ -2283,7 +2251,7 @@ class mesh:
     # ************************************************************************
     # well placement
     # ************************************************************************
-    def gen_wells(self,clear=True,wells=[]):
+    def gen_wells(self,clear=True,wells=[],style='EGS'):
         print( '*** well placement module ***')
         #clear old data
         if clear:
@@ -2291,8 +2259,180 @@ class mesh:
         #manual placement
         if len(wells) > 0:
             self.wells = wells
-        #automatic placement
-        else:
+        #EGS style placement
+        elif (style == 'EGS') or (style == 'CGS'):
+            #center
+            i0 = np.asarray([0.0, 0.0, 0.0])
+            #ref axes (parallel injector and 90 horizontal to the right)
+            azn = self.rock.w_azimuth
+            dip = self.rock.w_dip
+            vInj = np.asarray([math.sin(azn)*math.cos(-dip),
+                     math.cos(azn)*math.cos(-dip),math.sin(-dip)])
+            vRht = np.asarray([math.sin(azn+pi/2),math.cos(azn+pi/2),0.0])
+            vNor = np.asarray([math.sin(azn)*math.sin(-dip),
+                     math.cos(azn)*math.sin(-dip),math.cos(-dip)])
+            #offset center
+            p0 = i0 + vRht*self.rock.w_spacing
+            #toe in production well
+            toe = self.rock.w_toe
+            vPro = sg.rotatePoints([vInj],vNor,toe)[0]
+            #skew in production well
+            skew = self.rock.w_skew
+            vPro = sg.rotatePoints([vPro],vRht,skew)[0]
+            #phase of production wells
+            p0s = []
+            vPros = []
+            phase = self.rock.w_phase
+            num = self.rock.w_count
+            for i in range(0,num):
+                p0s += [sg.rotatePoints([p0],vInj,(i*2.0*pi/num + phase))[0]]
+                vPros += [sg.rotatePoints([vPro],vInj,(i*2.0*pi/num + phase))[0]]
+            #lengths of wells
+            length = self.rock.w_length
+            proportion = self.rock.w_proportion
+            iLen = length*proportion
+            pLen = length
+            cLen = pLen - iLen
+            #injection well reservoir segments
+            i1s = [] #startpoints
+            i2s = [] #endpoints
+            seg = self.rock.w_intervals
+            leg = iLen/(seg+seg-1)
+            i1s += [i0 - 0.5*vInj*iLen]
+            i2s += [i1s[0] + leg*vInj]
+            for i in range(1,seg):
+                i1s += [i2s[i-1] + leg*vInj]
+                i2s += [i1s[i] + leg*vInj]
+            #injection well segments to surface
+            ibs = i1s[0] - 0.5*cLen*vInj
+            iss = np.asarray([ibs[0],ibs[1],self.rock.ResDepth])
+            #production well segments
+            p1s = [] #startpoints
+            p2s = [] #endpoints
+            for i in range(0,num):
+                p1s += [p0s[i] - 0.5*vPros[i]*pLen]
+                p2s += [p0s[i] + 0.5*vPros[i]*pLen]    
+            #production well segments to surface
+            pss = []
+            for i in range(0,num):
+                pss += [np.asarray([p1s[i][0],p1s[i][1],self.rock.ResDepth+0.1])]
+            #wellheads
+            h = np.asarray([0.0,0.0,self.rock.w_spacing])
+            azn, dip, dis = azn_dip(iss+h,iss)
+            wells += [line(iss[0]+h[0],iss[1]+h[1],iss[2]+h[2],dis,azn,dip,'injector',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]
+            for i in range(0,num):
+                azn, dip, dis = azn_dip(pss[i]+h,pss[i])
+                wells += [line(pss[i][0]+h[0],pss[i][1]+h[1],pss[i][2]+h[2],dis,azn,dip,'producer',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]     
+            #place surface segments
+            azn, dip, dis = azn_dip(iss,ibs)
+            wells += [line(iss[0],iss[1],iss[2],dis,azn,dip,'pipe',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]
+            for i in range(0,num):
+                azn, dip, dis = azn_dip(pss[i],p1s[i])
+                wells += [line(pss[i][0],pss[i][1],pss[i][2],dis,azn,dip,'pipe',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]
+            #place injector base segment
+            azn, dip, dis = azn_dip(ibs,i1s[0])
+            wells += [line(ibs[0],ibs[1],ibs[2],dis,azn,dip,'pipe',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]
+            #place injection wells
+            for i in range(0,seg-1):
+                azn, dip, dis = azn_dip(i1s[0],i2s[0])
+                wells += [line(i1s[i][0],i1s[i][1],i1s[i][2],dis,azn,dip,'perfcluster',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]
+                azn, dip, dis2 = azn_dip(i2s[0],i1s[1])
+                wells += [line(i2s[i][0],i2s[i][1],i2s[i][2],dis2,azn,dip,'pipe',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]
+            azn, dip, dis = azn_dip(i1s[-1],i2s[-1])
+            wells += [line(i1s[-1][0],i1s[-1][1],i1s[-1][2],dis,azn,dip,'perfcluster',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]
+            #place production wells
+            for i in range(0,num):
+                azn, dip, dis = azn_dip(p1s[i],p2s[i])
+                wells += [line(p1s[i][0],p1s[i][1],p1s[i][2],dis,azn,dip,'screen',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]
+            #add to model domain
+            self.wells = wells
+        elif style == 'AGS': #closed loop geothermal
+            segle = self.rock.ResDepth/20.0 #segment length, m
+            separ = self.rock.w_spacing #well surface separation, m
+            branc = int(self.rock.w_count/2) #single-sided number of branches (mirrored about center well) 
+            #input overrides for economics
+            self.rock.w_proportion = 1.0
+            #general geometry
+            azn = self.rock.w_azimuth
+            dip = self.rock.w_dip
+            vAxi = np.asarray([math.sin(azn)*math.cos(-dip),math.cos(azn)*math.cos(-dip),math.sin(-dip)])
+            vert_z0 = np.sin(dip)*self.rock.w_length
+            orig_d0 = self.rock.ResDepth-np.sin(dip)*0.5*self.rock.w_length
+            hori_r0 = self.rock.w_length*np.cos(dip)
+            offs_z0 = self.rock.w_spacing/np.cos(dip)
+            #place injector and producer wells as the first two segments
+            inje_c0 = np.asarray([-0.5*hori_r0*np.sin(azn),-0.5*hori_r0*np.cos(azn),orig_d0])
+            prod_c0 = np.asarray([-(0.5*hori_r0-separ)*np.sin(azn),-(0.5*hori_r0-separ)*np.cos(azn),orig_d0])
+            wells += [line(inje_c0[0],inje_c0[1],inje_c0[2],segle,0.0*deg,90.0*deg,'injector',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]
+            wells += [line(prod_c0[0],prod_c0[1],prod_c0[2],segle,0.0*deg,90.0*deg,'producer',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]
+            #segment information: i = injector; v = vertical; l = length; n = count
+            ivl = self.rock.ResDepth - vert_z0 - segle
+            ivn = int(ivl/segle) + 1
+            ihl = self.rock.w_length
+            ihn = int(ihl/segle) + 1
+            pvl = self.rock.ResDepth - vert_z0 - offs_z0 + separ*np.tan(dip) - segle
+            pvn = int(pvl/segle) + 1
+            phl = self.rock.w_length - separ/np.cos(dip)
+            phn = int(phl/segle) + 1
+            #place injector segments
+            oi = inje_c0 + np.asarray([0,0,-segle])
+            ol = np.zeros(3,dtype=float)
+            for b in range(0,ivn):
+                wells += [line(oi[0],oi[1],oi[2], ivl/ivn, 0.0*deg,90.0*deg, 'pipe',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]
+                oi = oi + np.asarray([0.0,0.0,-ivl/ivn])
+            ol = ol + oi
+            for b in range(0,ihn):
+                wells += [line(oi[0],oi[1],oi[2], ihl/ihn, azn, dip, 'pipe',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]
+                oi = oi + vAxi*(ihl/ihn)
+            #place producer segments
+            op = prod_c0 + np.asarray([0,0,-segle])
+            ou = np.zeros(3,dtype=float)
+            for b in range(0,pvn):
+                wells += [line(op[0],op[1],op[2], pvl/pvn, 0.0*deg,90.0*deg, 'pipe',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]
+                op = op + np.asarray([0.0,0.0,-pvl/pvn])
+            ou = ou + op
+            for b in range(0,phn):
+                wells += [line(op[0],op[1],op[2], phl/phn, azn, dip, 'pipe',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]
+                op = op + vAxi*(phl/phn)
+            #place bottom hole connector
+            wells += [line(oi[0],oi[1],oi[2], offs_z0, 0.0*deg, -90.0*deg, 'pipe',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]
+            #transverse vector
+            vNor = np.cross(vAxi,np.asarray([0,0,1]))
+            vNor = vNor/np.linalg.norm(vNor)
+            #add branches
+            for v in range(0,branc):
+                #add transverse elements
+                wells += [line(ou[0],ou[1],ou[2], separ*(v+1), azn+90.0*deg,0.0*deg,'pipe',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]
+                wells += [line(ou[0],ou[1],ou[2], separ*(v+1), azn-90.0*deg,0.0*deg,'pipe',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]
+                wells += [line(ol[0],ol[1],ol[2], separ*(v+1), azn+90.0*deg,0.0*deg,'pipe',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]
+                wells += [line(ol[0],ol[1],ol[2], separ*(v+1), azn-90.0*deg,0.0*deg,'pipe',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]
+                #place injector segments
+                oi = np.copy(ol) + vNor*separ*(v+1)
+                for b in range(0,ihn):
+                    wells += [line(oi[0],oi[1],oi[2], ihl/ihn, azn, dip, 'pipe',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]
+                    oi = oi + vAxi*(ihl/ihn)
+                #place producer segments
+                op = np.copy(ou) + vNor*separ*(v+1)
+                for b in range(0,phn):
+                    wells += [line(op[0],op[1],op[2], phl/phn, azn, dip, 'pipe',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]
+                    op = op + vAxi*(phl/phn)
+                #place bottom connectors
+                wells += [line(oi[0],oi[1],oi[2], offs_z0, 0.0*deg, -90.0*deg, 'pipe',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]
+                #place injector segments
+                oi = np.copy(ol) - vNor*separ*(v+1)
+                for b in range(0,ihn):
+                    wells += [line(oi[0],oi[1],oi[2], ihl/ihn, azn, dip, 'pipe',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]
+                    oi = oi + vAxi*(ihl/ihn)
+                #place producer segments
+                op = np.copy(ou) - vNor*separ*(v+1)
+                for b in range(0,phn):
+                    wells += [line(op[0],op[1],op[2], phl/phn, azn, dip, 'pipe',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]
+                    op = op + vAxi*(phl/phn)  
+                #place bottom connectors
+                wells += [line(oi[0],oi[1],oi[2], offs_z0, 0.0*deg, -90.0*deg, 'pipe',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]
+            #add to model domain
+            self.wells = wells
+        else: #original placement module
             #center
             i0 = np.asarray([0.0, 0.0, 0.0])
             #ref axes (parallel injector and 90 horizontal to the right)
@@ -2344,12 +2484,16 @@ class mesh:
             wells = []
             azn, dip = azn_dip(i1s[0],i2s[0])
             for i in range(0,seg):
-                wells += [line(i1s[i][0],i1s[i][1],i1s[i][2],leg,azn,dip,'injector',
+                wells += [line(i1s[i][0],i1s[i][1],i1s[i][2],0.1*leg,-azn,dip,'injector',
+                               self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]
+                wells += [line(i1s[i][0],i1s[i][1],i1s[i][2],leg,azn,dip,'perfcluster',
                                self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]
             #place production wells
             for i in range(0,num):
                 azn, dip = azn_dip(p1s[i],p2s[i])
-                wells += [line(p1s[i][0],p1s[i][1],p1s[i][2],pLen,azn,dip,'producer',
+                wells += [line(p1s[i][0],p1s[i][1],p1s[i][2],0.1*pLen,-azn,dip,'producer',
+                               self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]
+                wells += [line(p1s[i][0],p1s[i][1],p1s[i][2],pLen,azn,dip,'screen',
                                self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]
             #add to model domain
             self.wells = wells
@@ -2439,12 +2583,17 @@ class mesh:
         self.Bout = []
         self.Qout = []
         self.Pout = []
+        self.Tout = []
+        self.Hout = []
         Flash_Power = []
         Binary_Power = []
         Pump_Power = []
         Net_Power = []
+        Bulk_Power = []
+        Therm_Power = []
         #truncate pressures when superciritical
-        i_p = np.max([list(self.i_p) + list(self.p_p)])/MPa
+        #i_p = (np.max([list(self.i_p) + list(self.p_p)])-self.rock.BH_P)/MPa
+        i_p = (np.max(self.p_p) - self.rock.BH_P - self.rock.dPp + self.rock.p_whp)/MPa
         if i_p > 100.0:
             i_p = 100.0
         #for each moment in time
@@ -2467,7 +2616,7 @@ class mesh:
             vr = state.v # m3/kg
             # Surface Production Well (2)
             P2 = self.rock.p_whp/MPa # MPa
-            h2 = self.p_hm[t] #kJ/kg
+            h2 = np.max([self.p_hm[t],1.0]) #kJ/kg
             state = therm(P=P2,h=h2)
             T2 = state.T # K
             s2 = state.s # kJ/kg-K
@@ -2578,11 +2727,15 @@ class mesh:
             Binary_Power += [Binary]
             Pump_Power += [Pump]
             Net_Power += [Net]
+            Bulk_Power += [Flash + Binary]
+            Therm_Power += [mt*(h2 - h5)]
         #record results
         self.Fout = np.asarray(Flash_Power)
         self.Bout = np.asarray(Binary_Power)
         self.Qout = np.asarray(Pump_Power)
         self.Pout = np.asarray(Net_Power)
+        self.Tout = np.asarray(Bulk_Power)
+        self.Hout = np.asarray(Therm_Power)
         #print( details)
         if detail:
             print( '\n*** Rankine Cycle Thermal State Values ***')
@@ -2677,7 +2830,7 @@ class mesh:
     # flow network model
     # ************************************************************************
 #    def get_flow(self,p_bound=0.0*MPa,q_inlet=[],q_outlet=[],p_inlet=[],p_outlet=[],reinit=True):
-    def get_flow(self,p_bound=0.0*MPa,q_well=[],p_well=[],reinit=True,useprior=False,Qnom=1.0):
+    def get_flow(self,p_bound=0.0*MPa,q_well=[],p_well=[],reinit=True,useprior=False,Qnom=1.0,auto_farfield=False):
         #reinitialize if the mesh has changed
         if reinit:
             #clear data from prior run
@@ -2686,7 +2839,7 @@ class mesh:
             self.gen_pipes()
         
         #set boundary conditions (m3/s) (Pa); 10 kg/s ~ 0.01 m3/s for water
-        self.set_bcs(p_bound=p_bound,q_well=q_well,p_well=p_well)
+        self.set_bcs(p_bound=p_bound,q_well=q_well,p_well=p_well,auto_farfield=auto_farfield)
         
         #get fluid properties
         mu = self.rock.Poremu #cP
@@ -2732,25 +2885,26 @@ class mesh:
             #working variables
             u = self.pipes.fID[i]
             
-            #pipes and wells
-            if (int(self.pipes.typ[i]) in [typ('injector'),typ('producer'),typ('pipe')]): #((Y[i][2] == 0): #pipe, Hazen-Williams
-                self.pipes.Dh[i] = np.min([self.pipes.Dh_max[i],self.wells[u].ra]) #!!! perhaps better to use self.pipes.W[i]?
+            #pipes and wells #modified 10/6/23 - go jags!
+            if (int(self.pipes.typ[i]) in [typ('injector'),typ('producer'),typ('pipe'),typ('perfcluster'),typ('screen')]):
+                self.pipes.Dh[i] = np.max([np.min([self.pipes.Dh_max[i],2.0*self.wells[u].ra]),1e-12]) # added 1e-12 lower limit to prevent div0
                 Lscaled = self.pipes.L[i]*mu/(0.9*cP)
-                K[i] = 10.7*Lscaled/(self.pipes.frict[i]**1.852*self.pipes.Dh[i]**4.87) #metric (m)
-                # K[i] = 10.7*self.pipes.L[i]/(self.pipes.frict[i]**1.852*self.pipes.Dh[i]**4.87) #metric (m) #old 2/11/23
-                # K[i] = 10.7*self.pipes.L[i]/(self.wells[u].rgh**1.852*self.wells[u].ra**4.87) #metric (m) #oldest
+                K[i] = 10.7*Lscaled/(self.pipes.frict[i]**1.852*self.pipes.Dh[i]**4.87) #viscosity scaled Hazen-Williams (is this valid?)
                 n[i] = 1.852
             #fractures and planes
-            elif (int(self.pipes.typ[i]) in [typ('boundary'),typ('fracture'),typ('propped'),typ('choke')]): #(int())Y[i][2] == 1: #fracture, effective cubic law
-                self.pipes.Dh[i] = np.min([self.pipes.Dh_max[i],self.faces[u].bh])
+            elif (int(self.pipes.typ[i]) in [typ('boundary'),typ('fracture'),typ('propped'),typ('choke')]):
+                self.pipes.Dh[i] = np.max([np.min([self.pipes.Dh_max[i],self.faces[u].bh]),1e-12])
                 K[i] = (12.0*mu*self.pipes.L[i])/(rho*g*self.pipes.W[i]*self.pipes.Dh[i]**3.0)
-                # K[i] = (12.0*mu*self.pipes.L[i])/(rho*g*self.pipes.W[i]*self.faces[u].bh**3.0)
-                n[i] = 1.0                    
+                n[i] = 1.0      
+            #casing perforations
+            elif (int(self.pipes.typ[i]) in [typ('perf')]):
+                self.pipes.Dh[i] = np.max([np.min([self.pipes.Dh_max[i],self.rock.perf_dia]),1e-12])
+                K[i] = 4.0*mu/(0.9*cP*self.rock.perf_per_cluster**2.0*self.pipes.Dh[i]**4.0*0.825**2.0*g)
+                n[i] = 2.0
             #porous media
             elif (int(self.pipes.typ[i]) in [typ('darcy')]):
-                self.pipes.Dh[i] = np.min([self.pipes.Dh_max[i],self.faces[u].bd])
+                self.pipes.Dh[i] = np.max([np.min([self.pipes.Dh_max[i],self.faces[u].bd]),1e-12])
                 K[i] = mu*self.pipes.L[i]/(rho*g*self.pipes.Dh[i]*self.pipes.W[i]*self.rock.kf)
-                # K[i] = mu*self.pipes.L[i]/(rho*g*self.faces[u].bd*self.pipes.W[i]*self.rock.Frack)
                 n[i] = 1.0
             #type not handled
             else:
@@ -2764,6 +2918,7 @@ class mesh:
         iters = 0
         max_iters = 50
         z = h
+        #fail = False
         # #add jitters #!!! commented out trying to get low pressure convergence
         # h += 2.0*goal*np.random.rand(N)-goal
         while 1:
@@ -2814,7 +2969,7 @@ class mesh:
             
             #solve matrix equations
             z = solve(D[:,:],F[:])
-            
+
             # #apply correction limiters to prevent excess overshoot
             # z[z > zlim] = zlim
             # z[z < -zlim] = -zlim
@@ -2842,8 +2997,8 @@ class mesh:
         self.q = q
 
         #collect well rates and pressures
-        i_q = []
-        i_p = []
+        # i_q = []
+        # i_p = []
         p_q = np.zeros(len(self.wells),dtype=float)
         p_p = np.zeros(len(self.wells),dtype=float)
         
@@ -2872,8 +3027,8 @@ class mesh:
         b_p = list(np.ones(len(b_q),dtype=float)*b_p[0])
                 
         #store key well and boundary flow data
-        self.i_p = i_p
-        self.i_q = i_q
+        # self.i_p = i_p
+        # self.i_q = i_q
         self.p_p = p_p
         self.p_q = p_q
         self.b_p = b_p
@@ -2907,7 +3062,8 @@ class mesh:
         
         #****** boundary parameters ******
         #truncate pressures when supercritical
-        i_p = np.max([list(self.i_p) + list(self.p_p)])/MPa
+        # i_p = (np.max([list(self.i_p) + list(self.p_p)]) - self.rock.BH_P)/MPa
+        i_p = (np.max(self.p_p) - self.rock.BH_P - self.rock.dPp + self.rock.p_whp)/MPa
         if i_p > 100.0:
             i_p = 100.0        
         # Surface Injection Well (5)
@@ -2939,17 +3095,15 @@ class mesh:
             y[i] = therm(T=x[i],P=Pr).h #kJ/kg
         hTP = np.polyfit(x,y,3)
         ThP = np.polyfit(y,x,3)
-        ##error checking
-        #y2 = hTP[0]*x**3.0 + hTP[1]*x**2.0 + hTP[2]*x**1.0 + hTP[3]
-        #x2 = ThP[0]*y**3.0 + ThP[1]*y**2.0 + ThP[2]*y**1.0 + ThP[3]
-        #fig = pylab.figure(figsize=(8.0, 6.0), dpi=96, facecolor='w', edgecolor='k',tight_layout=True) # Medium resolution
-        #ax1 = fig.add_subplot(111)
-        #ax1.plot(x,y,label='raw')
-        #ax1.plot(x,y2,label='fitted')
-        #ax1.plot(x2,y,label='reverse')
-        #ax1.set_ylabel('Enthalpy (kJ/kg)')
-        #ax1.set_xlabel('Temperature (K)')
-        #ax1.legend(loc='upper left', prop={'size':8}, ncol=2, numpoints=1)     
+        
+        #****** nodal rock temperature initialization *******
+        if self.rock.gradient:
+            #assume temperature as a function of depth
+            self.nodes.Tr = (self.rock.ResDepth - self.nodes.all[:,2]) * self.rock.ResGradient*1e-3 + self.rock.AmbTempC + 273.15
+            self.nodes.Tr[0] = Tr
+        else:
+            #assume same temperature everywhere
+            self.nodes.Tr = 0.0*self.nodes.Tr + Tr 
 
         #****** explicit solver setup ******
         #working variables
@@ -2962,14 +3116,14 @@ class mesh:
         N = self.nodes.num
         Np = self.pipes.num
         Tb = self.Tb
-#        Y = self.pipes
-        #initial guess for temperatures #!!!
-        Tn = np.ones(N) * (Tr-dT0) #K 
-        #Tn = np.ones(N) * Tr #K
-        #node pressures from flow solution
-        Pn = np.asarray(self.nodes.p)/MPa #MPa
-        #truncate high pressures for solver stability (supercritical states)
-        Pn[Pn > 100.0] = 100.0 
+        #initial guess for temperatures
+        #Tn = np.ones(N) * (Tr-dT0) #K #!!! method before gradient temperature
+        Tn = np.ones(N)*self.nodes.Tr #K 
+        # #node pressures from flow solution #!!!
+        # Pn = np.asarray(self.nodes.p)/MPa #MPa #!!!
+        # #truncate high pressures for solver stability (supercritical states) #!!!
+        # Pn[Pn > 100.0] = 100.0 #!!!
+        
         #install boundary condition
         for i in range(0,len(Tb)):
             Tn[Tb[i][0]] = Tb[i][1]
@@ -2978,7 +3132,7 @@ class mesh:
         Lp = np.asarray(self.pipes.L)
         ms = np.asarray(self.q)/v5 #assume density of fluid as injection fluid density at wellhead
         hn = np.zeros(N)
-        R0 = np.zeros(Np) #ones(len(Y))*2.0*BoreOR #initialize 'thermal radius' to 2x radius of borehole
+        R0 = np.zeros(Np) #initialize 'thermal radius' to 2x radius of borehole
         ResSv = self.rock.ResSv
         ResKt = self.rock.ResKt
         CemKt = self.rock.CemKt
@@ -2991,18 +3145,18 @@ class mesh:
         Qt = np.zeros((t_n+1,Np),dtype=float)
         Er = np.zeros(Np,dtype=float)
         
-        #well geometry #@@@@@@@ need to update for a per-borehole basis
+        #well geometry
         Ris = self.rock.ra
         Ric = self.rock.rb
         Rir = self.rock.rc
         
-        #functional form of energy vs thermal radius for specified borehole diameter (per unit DT and dL)
-        Ror = np.linspace(1,2000,2000)#(BoreOR,200,100)
+        #functional form of energy vs thermal radius for specified borehole diameter (per unit dT and dL)
+        Ror = np.linspace(1,2000,2000)
         ERor = 2*pi*ResSv*1.0*((1-np.log(Rir)/np.log(Rir/Ror))*(Ror**2-Rir**2)/2
             + (1/(2*np.log(Rir/Ror)))*(Ror**2*(np.log(Ror)-0.5)-Rir**2*(np.log(Rir)-0.5)))
         lnRor = np.log(Ror[:])
         lnERor = np.log(ERor[:])
-        ERm, ERb, r_value, p_value, std_err = stats.linregress(lnERor,lnRor)  # E[j] = np.exp((np.log(Ror)-ERb)/ERm)*dL*(Tor-T[j]) # kJ
+        ERm, ERb, r_value, p_value, std_err = stats.linregress(lnERor,lnRor)
         
         #key indecies for convergence criteria (i.e., boundary nodes)
         key = []
@@ -3016,9 +3170,9 @@ class mesh:
         #convergence criteria
         goal = 0.5
         goalE = 0.03
-        
+
         #iterate over time
-        for t in range(0,len(ts)-1): #!!! add self-estimation of dE0 for stabilization
+        for t in range(0,len(ts)-1):
             #calculate nodal temperatures by pipe flow and nodal mixing
             iters = 0
             err = np.ones(N)*goal*10
@@ -3040,7 +3194,7 @@ class mesh:
                 if iters > max_iters:
                     print( 'Heat solver halted after %i iterations' %(iters-1))
                     break
-                elif (kerr < goal) and (eerr < goalE):#np.max(np.abs(err)) < goal:
+                elif (kerr < goal) and (eerr < goalE):
                     print( 'Heat solver converged to %e Kelvin after %i iterations' %(goal,iters-1))
                     break
                 #follow the flow to estimate heating/cooling of fluid per pipe
@@ -3054,17 +3208,20 @@ class mesh:
                 for p in range(0,Np):
                     #working variables
                     n0 = self.pipes.n0[p]
-                    n1 = self.pipes.n1[p]                      
-                    #get overshoot limit for timestep for each pipe #!!! edit 9-13-2022 start
+                    n1 = self.pipes.n1[p]
+                    Tr0 = self.nodes.Tr[n0] 
+                    Tr1 = self.nodes.Tr[n1] 
+                    #get overshoot limit for timestep for each pipe
                     if (iters-1)%E0_update_intervals == 0:
-                        dT = 0.5*(Tn[n1] + Tn[n0]) - Tr
+                        #dT = 0.5*(Tn[n1] + Tn[n0]) - Tr #!!! solution before gradient
+                        dT = 0.5*(Tn[n1] + Tn[n0]) - 0.5*(Tr0 + Tr1)
                         dT = np.max([np.abs(dT0),np.abs(dT)])
                         a = 1.0/(self.rock.ResSv*np.abs(dT)*self.rock.ResKt*10**-3)
                         b = 1.0/self.rock.H_ConvCoef
                         c = -2.0*np.abs(dT)*dt
                         dE0 = (-b + (b**2.0 - 4.0*a*c)**0.5)/(2.0*a)
                         #get extracted energy - Et, thermal radius - R0, heat flow rate - Qt
-                        if (int(self.pipes.typ[p]) in [typ('injector'),typ('producer'),typ('pipe')]): #pipe, radial heat flow
+                        if (int(self.pipes.typ[p]) in [typ('injector'),typ('producer'),typ('pipe'),typ('perfcluster'),typ('screen'),typ('perf')]):  #pipe, radial heat flow
                             #energy withdraw
                             E0p = dE0*2.0*pi*Rir*Lp[p] #kJ
                             Esp = Et[t,p]
@@ -3086,38 +3243,76 @@ class mesh:
                             R0[p] = Etp/(ResSv*self.pipes.W[p]*Lp[p]*dT) #m
                             #rock energy transfer rates
                             Qt[t,p] = (2.0*self.pipes.W[p]*Lp[p])/(1.0/(H) + R0[p]/(ResKt*10**-3)) #kJ/K-s
+                        # elif (int(self.pipes.typ[p]) in [typ('perf')]):
+                        #     #rock energy withdraw
+                        #     E0p = 0.0 #kJ
+                        #     Esp = Et[t,p]
+                        #     Etp = np.max([E0p,Esp])
+                        #     dE0e[p] = Etp - E0e[p]
+                        #     E0e[p] = Etp
+                        #     #rock thermal radius
+                        #     R0[p] = 1.0e-3 #m
+                        #     #rock energy transfer rates
+                        #     Qt[t,p] = 0.0 #kJ/K-s
                         else:
-                            print( 'error: segment type %s not identified' %(typ(int(self.pipes.typ[p])))) #!!! edit 9-13-2022 end
+                            print( 'error: segment type %s not identified' %(typ(int(self.pipes.typ[p]))))
 
                     #equilibrium enthalpy
-                    heq0 = hTP[0]*Tr**3.0 + hTP[1]*Tr**2.0 + hTP[2]*Tr**1.0 + hTP[3]
-                    heq1 = heq0
+                    #heq0 = hTP[0]*Tr**3.0 + hTP[1]*Tr**2.0 + hTP[2]*Tr**1.0 + hTP[3] #!!! solution before gradient
+                    # heq1 = heq0 #!!! solution before gradient
+                    heq0 = hTP[0]*Tr0**3.0 + hTP[1]*Tr0**2.0 + hTP[2]*Tr0**1.0 + hTP[3]
+                    heq1 = hTP[0]*Tr1**3.0 + hTP[1]*Tr1**2.0 + hTP[2]*Tr1**1.0 + hTP[3]
+                    
                     
                     #working variables
                     Kp = 0.0
                     Qp = 0.0
-
+                    
+                    #!!! solution before gradient
+                    # #positive flow
+                    # if ms[p] > 0:
+                    #     #non-equilibrium conduction limited heating
+                    #     Ap[p] = Qt[t,p]*(Tr - 0.5*(Tn[n1] + Tn[n0]))
+                    #     #equilibrium conduction limited heating
+                    #     Bp[p] = Qt[t,p]*(Tr - 0.5*(Tr + Tn[n0]))
+                    #     #flow limited cooling to equilibrium
+                    #     Cp[p] = ms[p]*(heq1 - hn[n0])
+                    #     #flow limited cooling to non-equilibrium
+                    #     Dp[p] = ms[p]*(hn[n1] - hn[n0])
+    
+                    # #negative flow    
+                    # else:
+                    #     #non-equilibrium conduction limited heating
+                    #     Ap[p] = Qt[t,p]*(Tr - 0.5*(Tn[n0] + Tn[n1]))
+                    #     #equilibrium conduction limited heating
+                    #     Bp[p] = Qt[t,p]*(Tr - 0.5*(Tr + Tn[n1]))
+                    #     #flow limited cooling to equilibrium
+                    #     Cp[p] = -ms[p]*(heq0 - hn[n1])
+                    #     #flow limited cooling to non-equilibrium
+                    #     Dp[p] = -ms[p]*(hn[n0] - hn[n1])
+                    
+                    
                     #positive flow
                     if ms[p] > 0:
                         #non-equilibrium conduction limited heating
-                        Ap[p] = Qt[t,p]*(Tr - 0.5*(Tn[n1] + Tn[n0]))
+                        Ap[p] = Qt[t,p]*(0.5*(Tr1 + Tr0) - 0.5*(Tn[n1] + Tn[n0]))
                         #equilibrium conduction limited heating
-                        Bp[p] = Qt[t,p]*(Tr - 0.5*(Tr + Tn[n0]))
+                        Bp[p] = Qt[t,p]*(Tr1 - 0.5*(Tr1 + Tn[n0]))
                         #flow limited cooling to equilibrium
                         Cp[p] = ms[p]*(heq1 - hn[n0])
-                        #flow limited cooling to non-equilibrium
-                        Dp[p] = ms[p]*(hn[n1] - hn[n0])
+                        # #flow limited cooling to non-equilibrium #!!! not possible
+                        # Dp[p] = ms[p]*(hn[n1] - hn[n0]) #!!! not possible
     
                     #negative flow    
                     else:
                         #non-equilibrium conduction limited heating
-                        Ap[p] = Qt[t,p]*(Tr - 0.5*(Tn[n0] + Tn[n1]))
+                        Ap[p] = Qt[t,p]*(0.5*(Tr0 + Tr1) - 0.5*(Tn[n0] + Tn[n1]))
                         #equilibrium conduction limited heating
-                        Bp[p] = Qt[t,p]*(Tr - 0.5*(Tr + Tn[n1]))
+                        Bp[p] = Qt[t,p]*(Tr0 - 0.5*(Tr0 + Tn[n1]))
                         #flow limited cooling to equilibrium
                         Cp[p] = -ms[p]*(heq0 - hn[n1])
-                        #flow limited cooling to non-equilibrium
-                        Dp[p] = -ms[p]*(hn[n0] - hn[n1])
+                        # #flow limited cooling to non-equilibrium #!!! not possible
+                        # Dp[p] = -ms[p]*(hn[n0] - hn[n1]) #!!! not possible
                         
                     #take maximum of conduction terms because this will drive conduction heat deliverability
                     Kp = np.asarray([Ap[p],Bp[p]])[np.argmax(np.abs([Ap[p],Bp[p]]))]
@@ -3150,23 +3345,23 @@ class mesh:
                 
                 #calculate nodal temperatures
                 z = []
-                z = np.zeros(N,dtype=float) #-0.0001*np.random.rand(N) + Tr #K
-                hu = np.zeros(N,dtype=float)
+                z = np.zeros(N,dtype=float) #K
+                hu = np.zeros(N,dtype=float) #kJ/kg
                 for n in range(0,N):
                     #mixed inflow enthalpy
                     if mi[n] > 0:
                         hu[n] = hm[n]/mi[n]
+                    #no inflow use rock enthalpy
                     else:
-                        hu[n] = hr
+                        #hu[n] = hr #!!! solution before gradient
+                        hu[n] = hTP[0]*self.nodes.Tr[n]**3.0 + hTP[1]*self.nodes.Tr[n]**2.0 + hTP[2]*self.nodes.Tr[n]**1.0 + hTP[3]
                     #calculate temperature at new enthalpy
-#                    z[n] = therm(h=hu[n],P=Pn[n]).T
                     z[n] = ThP[0]*hu[n]**3.0 + ThP[1]*hu[n]**2.0 + ThP[2]*hu[n]**1.0 + ThP[3]
                     
                 
                 #install boundary condition
                 for j in range(0,len(Tb)):
                     z[Tb[j][0]] = Tb[j][1]
-#                    hu[Tb[j][0]] = therm(T=z[Tb[j][0]],P=Pn[Tb[j][0]]).h
                     hu[Tb[j][0]] = hTP[0]*z[Tb[j][0]]**3.0 + hTP[1]*z[Tb[j][0]]**2.0 + hTP[2]*z[Tb[j][0]]**1.0 + hTP[3]
                     
                 #calculate error
@@ -3184,9 +3379,9 @@ class mesh:
             Rt[t,:] = R0
             
             #timelapse 3D
+            self.nodes.T = Tn
+            self.nodes.h = hn
             if lapse:
-                self.nodes.T = Tn
-                self.nodes.h = hn
                 self.build_vtk(fname='t%02d' %(t))
     
             #extracted energy during this time step
@@ -3197,13 +3392,15 @@ class mesh:
                 #working variables
                 n0 = self.pipes.n0[i]
                 n1 = self.pipes.n1[i]
-                dT = abs(Tr-0.5*(Tn[n1]+Tn[n0]))
-                
-                #@@@@ stabilizer
-                dT = np.max([dT,dT0])
+                Tr0 = self.nodes.Tr[n0] 
+                Tr1 = self.nodes.Tr[n1] 
+                #dT = abs(Tr-0.5*(Tn[n1]+Tn[n0])) #!!! solution before gradient
+                #dT = np.max([dT,dT0]) #!!! solution before gradient
+                dT = 0.5*(Tn[n1] + Tn[n0]) - 0.5*(Tr0 + Tr1)
+                dT = np.max([np.abs(dT0),np.abs(dT)])
 
                 #thermal radius for next time step
-                if (int(self.pipes.typ[i]) in [typ('injector'),typ('producer'),typ('pipe')]): #pipe, radial heat flow
+                if (int(self.pipes.typ[i]) in [typ('injector'),typ('producer'),typ('pipe'),typ('perfcluster'),typ('screen'),typ('perf')]): #pipe, radial heat flow
                     if (dT > 0) and (Et[t+1,i] > 0):
                         R0[i] = np.exp(ERm*(np.log(np.abs(Et[t+1,i]/(Lp[i]*dT))))+ERb) + Rir #+2.0*Rir # m
                     #Et[0,i] = np.exp((np.log(R0[i])-ERb)/ERm)*Lp[i]*(Tr-0.5*(Tn[Y[i][1]]+Tn[Y[i][0]])) # kJ
@@ -3214,6 +3411,12 @@ class mesh:
                         R0[i] = Et[t+1,i]/(ResSv*self.pipes.W[i]*Lp[i]*dT)
                     #Et[0,i] = ResSv*R0[i]*Y[i][4]*Lp[i]*(Tr-0.5*(Tn[Y[i][1]]+Tn[Y[i][0]])) # kJ
                     Qt[t+1,i] = (2.0*self.pipes.W[i]*Lp[i])/(1.0/(H) + R0[i]/(ResKt*10**-3)) # kJ/K-s # Note converted Kt in W/m-K to kW/m-K
+
+                # elif (int(self.pipes.typ[i]) in [typ('perf')]): #pipe, radial heat flow
+                #     R0[i] = 1.0e-6 # m
+                #     #Et[0,i] = np.exp((np.log(R0[i])-ERb)/ERm)*Lp[i]*(Tr-0.5*(Tn[Y[i][1]]+Tn[Y[i][0]])) # kJ
+                #     Qt[t+1,i] = 0.0 # kJ/K-s
+
                 else:
                     print( 'error: segment type %s not identified' %(typ(int(self.pipes.typ[i]))))
         
@@ -3228,6 +3431,9 @@ class mesh:
         self.R0 = R0
         self.Rt = Rt
         
+        #updated storage approach
+        self.pipes.R0 = R0
+        
         #parameters of interest
         #**********************
         #collect well temp, rate, enthalpy
@@ -3235,17 +3441,19 @@ class mesh:
         w_T = []
         w_m = []
         for w in range(0,len(self.wells)):
-            #coordinates
-            source = self.wells[w].c0
-            #find index of duplicate
-            ck, i = self.nodes.add(source)
-            #record temperature
-            w_T += [Tt[:,i]]
-            #record enthalpy
-            w_h += [ht[:,i]]
-            #record mass flow rate
-            i_pipe = np.where(np.asarray(self.pipes.n0) == i)[0][0]
-            w_m += [self.q[i_pipe]/v5]
+            #type
+            if (int(self.wells[w].typ) in [typ('injector'),typ('producer')]):
+                #coordinates
+                source = self.wells[w].c0
+                #find index of duplicate
+                ck, i = self.nodes.add(source)
+                #record temperature
+                w_T += [Tt[:,i]]
+                #record enthalpy
+                w_h += [ht[:,i]]
+                #record mass flow rate
+                i_pipe = np.where(np.asarray(self.pipes.n0) == i)[0][0]
+                w_m += [self.q[i_pipe]/v5]
         w_h = np.asarray(w_h)
         w_T = np.asarray(w_T)
         w_m = np.asarray(w_m)
@@ -3277,7 +3485,7 @@ class mesh:
         
         #mixed produced enthalpy and mass flow rate
         p_mm = []
-        p_hm = np.zeros(len(ts))
+        p_hm = np.ones(len(ts))*therm(T=self.rock.AmbTempC + 273.15,P=self.rock.AmbPres/MPa).h
         p_mm = 0.0
         for i in iPro:
             i = int(i)
@@ -3401,7 +3609,7 @@ class mesh:
         print( '*** dynamic stim module ***')
         #fetch defaults
         if perfs < 0:
-            perfs = self.rock.perf
+            perfs = self.rock.perf_clusters
         if r_perf < 0:
             r_perf = self.rock.r_perf
         if sand < 0:
@@ -3426,20 +3634,26 @@ class mesh:
         #production well pressure
         pwp = bhp + dpp #Pa
             
-        #get index of injection and production wells (index will match p_q and i_q from flow solver outputs)
+        #get index of key wells (index will match p_q and i_q from flow solver outputs)
         i_div = 0
-        i_key = []
+        i_key = [] #injectors
         p_div = 0
-        p_key = []
+        p_key = [] #producers
+        s_div = 0
+        s_key = [] #perforated zones
         for i in range(0,len(self.wells)):
             if (int(self.wells[i].typ) in [typ('injector')]):
                 i_key += [int(i)]
                 i_div += 1
-            if (int(self.wells[i].typ) in [typ('producer')]):
+            elif (int(self.wells[i].typ) in [typ('producer')]):
                 p_key += [int(i)]
                 p_div += 1
+            elif (int(self.wells[i].typ) in [typ('perfcluster')]):
+                s_key += [int(i)]
+                s_div += 1
         i_key = np.asarray(i_key,dtype=int)
         p_key = np.asarray(p_key,dtype=int)
+        s_key = np.asarray(s_key,dtype=int)
         
         #initialize targets for stimulation
         if not target:
@@ -3619,19 +3833,16 @@ class mesh:
                     #if (nat_stim == False) and (tip > self.rock.s3+0.1*MPa) and (hydrofrac == False): #and (np.max(self.p_p) < 0.0):
                     elif (self.wells[i_key[i]].hydrofrac == False) and (tip[i] > (self.rock.s3 + self.rock.hfmcc)):
                         print( '   ! (%i) hydraulic fractures' %(i))
-                        #hydrofrac[i] = True
-                        self.wells[i_key[i]].hydrofrac = True #!!!
-                        #seed hydraulic fracture
-                        self.gen_stimfracs(target=i_key[i],perfs=perfs,
+                        self.wells[i_key[i]].hydrofrac = True
+                        #seed hydraulic fracture, note that hydrofractures will not be in the injectors, they are in the perfclusters
+                        self.gen_stimfracs(target=s_key[i],perfs=perfs,
                                       f_dia = [2.0*r_perf,0.0],
                                       f_azn = [self.rock.s3Azn+np.pi/2.0, self.rock.s3AznVar],
                                       f_dip = [np.pi/2.0-self.rock.s3Dip, self.rock.s3DipVar],
                                       clear=False)
                         for notch in range(0,perfs):
-                            #print('stim integrity check %i: pres = %.3e, tip = %.3e' %(len(self.faces)+perfs-notch-1,(self.rock.s3 + self.rock.hfmcc),tip[i]))
                             fi = len(self.hydfs)-notch-1
                             si = self.hydfs[fi].sn
-                            #self.hydfs[len(self.hydfs)-notch-1].make_critical(rock=self.rock,pres=(tip[i]-0.5*self.rock.dPi)) #!!! check uses injection pressure
                             self.hydfs[fi].make_critical(rock=self.rock,pres=(si+self.rock.hfmcc))
                     #if insufficient pressure and insufficient rate or too many repeated stimulations, increase pressure
                     elif ((nat_stim == False) or (((int(num_stim) + 1) % int(self.rock.stim_limit)) == 0)):
@@ -3705,25 +3916,43 @@ class mesh:
                 fID = self.pipes.fID[j]
                 wID = self.pipes.fID[j-1]
                 Qii = self.p_q[wID]
-                if (self.wells[wID].typ  == typ('injector')): # or (self.wells[wID].typ == typ('producer')):
+                if (self.wells[wID].typ  == typ('injector')) or (self.wells[wID].typ  == typ('perfcluster')): # or (self.wells[wID].typ == typ('producer')):
                     if (self.faces[fID].hydroprop):
                         stabilize[wID] = True
         
         #***** flow rate solve for heat transfer solution
-        print( '2: Flow boundary conditions with stimulation disabled -> get flow in network')
+        print( '2: First flow boundary conditions with stimulation disabled -> get flow in network')
         q_well = np.full(len(self.wells),None)
         p_well = np.full(len(self.wells),None)
         #set injection boundary conditions using flow values, unless stable flow was never acheived (e.g., hydrofrac only)
         for i in range(0,i_div):
             Qii = self.p_q[i_key[i]]
-            if (stabilize[i]) or (Qii > Qinj):
+            if (stabilize[i]) or (Qii > 0.95*Qinj):
                 q_well[i_key[i]] = Qinj
             else:
+                print('-> note: An injector is being given a pressure boundary condition when a flow boundary is preferred')
                 p_well[i_key[i]] = tip[i]
         #set production boundary conditions
         for i in range(0,p_div):
             p_well[p_key[i]] = pwp
+        #solve flow
+        self.get_flow(p_bound=bhp,p_well=p_well,q_well=q_well,reinit=False,useprior=True,Qnom=Qinj)
         
+        #***** repeated solution to prevent extreme high flow errors
+        print( '3: Second flow boundary conditions with stimulation disabled -> get flow in network')
+        q_well = np.full(len(self.wells),None)
+        p_well = np.full(len(self.wells),None)
+        #set injection boundary conditions using flow values, unless stable flow was never acheived (e.g., hydrofrac only)
+        for i in range(0,i_div):
+            Qii = self.p_q[i_key[i]]
+            if (stabilize[i]) or (Qii > 0.95*Qinj):
+                q_well[i_key[i]] = Qinj
+            else:
+                print('-> note: An injector is being given a pressure boundary condition when a flow boundary is preferred')
+                p_well[i_key[i]] = tip[i]
+        #set production boundary conditions
+        for i in range(0,p_div):
+            p_well[p_key[i]] = pwp
         #solve flow
         self.get_flow(p_bound=bhp,p_well=p_well,q_well=q_well,reinit=False,useprior=True,Qnom=Qinj)
         
@@ -3770,7 +3999,7 @@ class mesh:
                       clear = True, visuals = True, fname = 'stim'):
         #fetch defaults
         if perfs < 0:
-            perfs = self.rock.perf
+            perfs = self.rock.perf_clusters
         if r_perf < 0:
             r_perf = self.rock.r_perf
         if sand < 0:
@@ -3806,7 +4035,7 @@ class mesh:
                       clear = True, visuals = True, fname = 'stim'):
         #fetch defaults
         if perfs < 0:
-            perfs = self.rock.perf
+            perfs = self.rock.perf.num
         if r_perf < 0:
             r_perf = self.rock.r_perf
         if sand < 0:
@@ -3940,404 +4169,351 @@ class mesh:
     # ************************************************************************
     # optimization objective function (with $!!!), to be normalized to 2021 studies
     # ************************************************************************
-    def get_economics(self, 
-                      interest = 0.04, #standard inflation rate, 4% rule
-                      sales_kWh = 0.1372, #$/kWh - customer electricity retail price                  
-                      drill_m = 2763.06, #$/m - Lowry et al, 2017 large diameter well baseline
-                      pad_fixed = 590e3, #$ Lowry et al, 2017 large diameter well baseline
-                      plant_kWe = 2025.65, #$/kWe simplified from GETEM model 
-                      explore_m = 2683.41, #$/m simplified from GETEM model
-                      oper_kWh = 0.03648, #$/kWh simplified from GETEM model
-                      quake_coef = 2e-4, #$/Mw for $300M Mw 5.5 quake Pohang (Westaway, 2021) & $17.2B Mw 6.3 quake Christchurch (Swiss Re)
-                      quake_exp = 5.0, #$/Mw for $300M Mw 5.5 quake Pohang (Westaway, 2021) & $17.2B Mw 6.3 quake Christchurch (Swiss Re)
+    def get_economics(self,
                       detail=False, #print cycle infomation
                       plots=False): #plot results
         #eliminate periods of negative net power production
         Pout_NN = self.Pout+0.0
         Pout_NN[Pout_NN < 0.0] = 0.0
         NPsum = np.sum(Pout_NN)
+        TPsum = np.sum(self.Tout)
+        HPsum = np.sum(self.Hout)
         #get system values
         dt = (self.ts[1]-self.ts[0])/yr
         life = self.rock.LifeSpan/yr
         depth = self.rock.ResDepth
-        lateral = (self.rock.w_length*self.rock.w_count) + (self.rock.w_proportion*self.rock.w_length)
-        drill_len = self.rock.ResDepth*(self.rock.w_count+1) + lateral
+        drill_len = 0.0
+        for w in range(0,len(self.wells)): #when all the wells are in the model
+            drill_len += self.wells[w].leg
+        if drill_len < self.rock.w_count*self.rock.ResDepth: #wells most likely in reservoir only
+            lateral = (self.rock.w_length*self.rock.w_count) + (self.rock.w_proportion*self.rock.w_length)
+            drill_len = self.rock.ResDepth*(self.rock.w_count+1) + lateral
         Max_Quake = -10.0
         for i in range(0,len(self.faces)):
             if self.faces[i].Mws:
                 Max_Quake = np.max([Max_Quake,np.max(self.faces[i].Mws)])
-        #NPsum = np.sum(self.Pout[:])
         #power profit
-        P = (sales_kWh-oper_kWh)*NPsum*dt*24.0*365.2425
+        P = self.sales_kWh*NPsum*dt*24.0*365.2425
+        #bulk power sales
+        B = self.sales_kWh*TPsum*dt*24.0*365.2425
         #capital costs
         C = 0.0
-        C += drill_m*drill_len
-        C += pad_fixed
-        C += plant_kWe*NPsum*dt/life
-        C += explore_m*depth
+        C += self.drill_m*drill_len
+        C += self.pad_fixed
+        C += np.max([0.0,self.plant_kWe*NPsum*dt/life])
+        C += self.explore_m*depth
         #quake cost
-        Q = quake_coef * np.exp(Max_Quake*quake_exp)
+        Q = self.quake_coef * np.exp(Max_Quake*self.quake_exp)
+        #generation cost
+        G = self.oper_kWh*TPsum*dt*24.0*365.2425
         #net present value
-        NPV = P - C - Q
+        NPV = P - C - Q - G
+        #cost per MWe-h net electic power production
+        CpM = 0.0
+        if NPsum <= 0:
+            CpM = np.inf
+        else:
+            CpM = (C + Q + G)/(10**-3*NPsum*dt*24.0*365.2425)
+        #cost per MWe-h production without pumping losses
+        CpM_prod = 0.0
+        if TPsum <= 0:
+            CpM_prod = np.inf
+        else:
+            CpM_prod = (C + Q + G)/(10**-3*TPsum*dt*24.0*365.2425)
+        #cost per MWt-h bulk extraction
+        CpM_ther = 0.0
+        if HPsum <= 0:
+            CpM_ther = np.inf
+        else:
+            CpM_ther = (C + Q)/(10**-3*HPsum*dt*24.0*365.2425)
         #detail
         if detail:
             print('\n*** economics module ***')
             print('   sales: $%.0f (%.2f kWh)' %(P,NPsum*dt*24.0*365.2425))
             print('   capital: $%.0f (%.2f m drilled length)' %(C,drill_len))
             print('   seismic: $%.0f (%.2f Mw max quake)' %(Q,Max_Quake))
-            print('   NPV: $%.0f' %(NPV))
+            print('   net present value (npv): $%.0f' %(NPV))
+            print('   cost per megawatt-hour: $%.2f/MWe-h' %(CpM))
         
-        self.NPV = NPV
-        return NPV, P, C, Q
+        self.eNPV = NPV
+        self.eC = C
+        self.eQ = Q
+        self.eG = G
+        self.eP = P
+        self.eB = B
+        self.CpM_elec = CpM #cost per net MWe-h
+        self.CpM_prod = CpM_prod #cost per produced MWe-h
+        self.CpM_ther = CpM_ther #cost per MWt-h
+        self.drill_length = drill_len #calculated drilled length
+        return NPV, P-G, C, Q
+    
+# Visualization tools
+class visualization:
+    def __init__(self,filename='inputs_results_FORGE.txt'):
+        #import data
+        self.data = []
+        self.raw = [] 
+        self.cat_data = []
+        self.cat_name = []
+        self.filename = filename
+        self.data = np.recfromcsv(filename,delimiter=',',filling_values=np.nan,deletechars='()',case_sensitive=True,names=True)
+        self.names = self.data.dtype.names
+        self.orig = np.copy(self.data)
+        #restructure timeseries data
+        self.LifeSpan = self.data['LifeSpan'][0]/yr
+        self.TimeSteps = int(self.data['TimeSteps'][0])
+        self.ts = np.linspace(0,self.LifeSpan,self.TimeSteps+1)[:-1]
+        self.dt = self.ts[1]-self.ts[0]
+        self.hpro = np.zeros((len(self.data),self.TimeSteps),dtype=float)
+        self.Pout = np.zeros((len(self.data),self.TimeSteps),dtype=float)
+        self.dhout = np.zeros((len(self.data),self.TimeSteps),dtype=float)
+        j = [0,0,0]
+        for i in range(0,len(self.names)):
+            if 'hpro' in self.names[i]:
+                self.hpro[:,j[0]] = self.data[self.names[i]]
+                j[0] += 1
+            elif 'Pout' in self.names[i]:
+                self.Pout[:,j[1]] = self.data[self.names[i]]
+                j[1] += 1
+            elif 'dhout' in self.names[i]:
+                self.dhout[:,j[2]] = self.data[self.names[i]]
+                j[2] += 1
+        #compute temperature enthalpy quick estimate curve
+        T_lo = np.min([np.min(self.data['Tinj']),np.min(self.data['BH_T'])])+273.15 #K
+        T_hi = np.max(self.data['BH_T']) #K
+        P_avg = np.average(self.data['BH_P'])*10**-6 #MPa
+        x = np.linspace(T_lo,T_hi,100,dtype=float)
+        y = np.zeros(100,dtype=float)
+        for i in range(0,len(x)):
+            y[i] = therm(T=x[i],P=P_avg).h #kJ/kg
+        self.T_to_h = np.polyfit(x,y,3)
+        self.h_to_T = np.polyfit(y,x,3)  
+        #compute useful parameters for evaluation
+        self.Pavg = np.sum(self.Pout,axis=1)*self.dt/self.LifeSpan
+        self.Tpro = np.zeros((len(self.data),self.TimeSteps),dtype=float)
+        for t in range(0,self.TimeSteps):
+            self.Tpro[:,t] = self.h_to_T[0]*self.hpro[:,t]**3.0 + self.h_to_T[1]*self.hpro[:,t]**2.0 + self.h_to_T[2]*self.hpro[:,t] + self.h_to_T[3]
+        self.tcrit = 0.1*(self.data['BH_T']-(self.data['Tinj']+273.15))
+        self.breakthrough = np.zeros(len(self.data))
+        for i in range(0,len(self.data)):
+            hold = np.argwhere(np.abs((self.data['BH_T'][i]-self.Tpro[i,:])) > self.tcrit[i])
+            if len(hold) < 1:
+                self.breakthrough[i] = self.data['TimeSteps'][i] + 1
+            else:
+                self.breakthrough[i] = hold[0][0]
+        self.breakthrough = self.breakthrough*(self.dt)
+        #normalize data
+        self.data_n = np.copy(self.data)
+        for n in self.names:
+            np.nan_to_num(self.data_n[n],copy=False,nan=0.0)
+            if n == 'w_skew':
+                self.data_n[n] = np.abs(self.data_n[n])
+            span = np.max(self.data_n[n])-np.min(self.data_n[n])
+            if span > 0:
+                self.data_n[n] = (self.data_n[n]-np.min(self.data_n[n]))/span
+            else:
+                self.data_n[n] = 0.0
+        #notification
+        print( '*** visualiztion module ***')
+        print('Loaded %s with %i samples' %(filename,len(self.data)))
+    #2 axis scatter plot with color per 3rd axis
+    def scatter_3D(self,x,y,c,name=['x','y','c','save'],cmap='rainbow_r',xlog=False,ylog=False,vrange=[],view=True):
+        fig = pylab.figure(figsize=(10.0,5.0),dpi=100)
+        ax1 = fig.add_subplot(111)
+        if vrange:
+            sc = ax1.scatter(x=x,y=y,c=c,vmin=vrange[0],vmax=vrange[1],cmap=plt.cm.get_cmap(cmap))
+        else:
+            sc = ax1.scatter(x=x,y=y,c=c,cmap=plt.cm.get_cmap(cmap))
+        plt.colorbar(mappable=sc,label=name[2],orientation='vertical')
+        ax1.set_xlabel(name[0],fontsize=10)
+        ax1.set_ylabel(name[1],fontsize=10)
+        if xlog: ax1.set_xscale('log')
+        if ylog: ax1.set_yscale('log')
+        plt.tight_layout()
+        plt.savefig(name[3]+'.png', format='png')
+        if not(view): 
+            pylab.close()
+    #multi-timeseries
+    def timeseries(self,ts,ys,name=['t','y','save'],xlog=False,ylog=False,vrange=[],view=False):
+        fig = pylab.figure(figsize=(10.0,5.0),dpi=100)
+        ax1 = fig.add_subplot(111)
+        for s in range(0,len(ys)):
+            ax1.plot(ts,ys[s,:])
+        ax1.set_xlabel(name[0],fontsize=10)
+        ax1.set_ylabel(name[1],fontsize=10)
+        plt.tight_layout()
+        plt.savefig(name[2], format='png')
+    #data filter
+    def multifilter(self,target='pin',compare=None,vs=[0.0,1e12]):
+        keep = np.ones(len(self.data),dtype=bool)
+        if compare:
+            keep = (self.data[target] < vs[1]*self.data[compare]) * (self.data[target] > vs[0]*self.data[compare])
+        else:
+            keep = (self.data[target] < vs[1]) * (self.data[target] > vs[0])
+        self.data = self.data[keep]
+        self.data_n = self.data_n[keep]
+        self.Pavg = self.Pavg[keep]
+        self.hpro = self.hpro[keep,:]
+        self.Pout = self.Pout[keep,:]
+        self.dhout = self.dhout[keep,:]
+        self.Tpro = self.Tpro[keep,:]
+        self.tcrit = self.tcrit[keep]
+        self.breakthrough = self.breakthrough[keep]
+        print('filtered to %i samples using %s' %(len(self.data),target))
+    #reset
+    def reset(self):
+        self.data = np.copy(self.orig)
+        #restructure timeseries data
+        self.LifeSpan = self.data['LifeSpan'][0]/yr
+        self.TimeSteps = int(self.data['TimeSteps'][0])
+        self.ts = np.linspace(0,self.LifeSpan,self.TimeSteps+1)[:-1]
+        self.dt = self.ts[1]-self.ts[0]
+        self.hpro = np.zeros((len(self.data),self.TimeSteps),dtype=float)
+        self.Pout = np.zeros((len(self.data),self.TimeSteps),dtype=float)
+        self.dhout = np.zeros((len(self.data),self.TimeSteps),dtype=float)
+        j = [0,0,0]
+        for i in range(0,len(self.names)):
+            if 'hpro' in self.names[i]:
+                self.hpro[:,j[0]] = self.data[self.names[i]]
+                j[0] += 1
+            elif 'Pout' in self.names[i]:
+                self.Pout[:,j[1]] = self.data[self.names[i]]
+                j[1] += 1
+            elif 'dhout' in self.names[i]:
+                self.dhout[:,j[2]] = self.data[self.names[i]]
+                j[2] += 1
+        #compute temperature enthalpy quick estimate curve
+        T_lo = np.min([np.min(self.data['Tinj']),np.min(self.data['BH_T'])])+273.15 #K
+        T_hi = np.max(self.data['BH_T']) #K
+        P_avg = np.average(self.data['BH_P'])*10**-6 #MPa
+        x = np.linspace(T_lo,T_hi,100,dtype=float)
+        y = np.zeros(100,dtype=float)
+        for i in range(0,len(x)):
+            y[i] = therm(T=x[i],P=P_avg).h #kJ/kg
+        self.T_to_h = np.polyfit(x,y,3)
+        self.h_to_T = np.polyfit(y,x,3)  
+        #compute useful parameters for evaluation
+        self.Pavg = np.sum(self.Pout,axis=1)*self.dt/self.LifeSpan
+        self.Tpro = np.zeros((len(self.data),self.TimeSteps),dtype=float)
+        for t in range(0,self.TimeSteps):
+            self.Tpro[:,t] = self.h_to_T[0]*self.hpro[:,t]**3.0 + self.h_to_T[1]*self.hpro[:,t]**2.0 + self.h_to_T[2]*self.hpro[:,t] + self.h_to_T[3]
+        self.tcrit = 0.1*(self.data['BH_T']-(self.data['Tinj']+273.15))
+        self.breakthrough = np.zeros(len(self.data))
+        for i in range(0,len(self.data)):
+            hold = np.argwhere(np.abs((self.data['BH_T'][i]-self.Tpro[i,:])) > self.tcrit[i])
+            if len(hold) < 1:
+                self.breakthrough[i] = self.data['TimeSteps'][i] + 1
+            else:
+                self.breakthrough[i] = hold[0][0]
+        self.breakthrough = self.breakthrough*(self.dt)
+        #normalize data
+        self.data_n = np.copy(self.data)
+        for n in self.names:
+            np.nan_to_num(self.data_n[n],copy=False,nan=0.0)
+            if n == 'w_skew':
+                self.data_n[n] = np.abs(self.data_n[n])
+            span = np.max(self.data_n[n])-np.min(self.data_n[n])
+            if span > 0:
+                self.data_n[n] = (self.data_n[n]-np.min(self.data_n[n]))/span
+            else:
+                self.data_n[n] = 0.0
+    #categorizer
+    def categorize(self,target='Pavg',criteria=[0.0,1e5,1e6,1e7]):
+        keeps = np.zeros((len(criteria)+1,len(self.data)),dtype=bool)
+        if target == 'Pavg':
+            vs = self.Pavg
+        elif target == 'breakthrough':
+            vs = self.breakthrough
+        else:
+            vs = self.data[target]
+        keeps[0,:] = (vs < criteria[0])
+        keeps[-1,:] = (vs > criteria[-1])
+        if len(criteria) > 1:
+            for c in range(1,len(criteria)):
+                keeps[c,:] = (vs > criteria[c-1]) * (vs < criteria[c])
+        return keeps
+    #categorical boxplot
+    def boxplot(self,
+                criteria=[['Pavg',[1e3],'above'],
+                          ['recovery',[0.90,1.11],'between'],
+                          ['breakthrough',[0.5,9.0],'between'],
+                          ['max_quake',[1.0],'below']],
+                column=['ResDepth','qinj','w_spacing','perf_clusters','w_intervals','kf','perf_dia','dPp','pinj','qpro']):
+        #create plot
+        fig = pylab.figure(figsize=(16,13),dpi=100)
+        #normalize data
+        self.data_n = np.copy(self.data)
+        for n in self.names:
+            np.nan_to_num(self.data_n[n],copy=False,nan=0.0)
+            if n == 'w_skew':
+                self.data_n[n] = np.abs(self.data_n[n])
+            span = np.max(self.data_n[n])-np.min(self.data_n[n])
+            if span > 0:
+                self.data_n[n] = (self.data_n[n]-np.min(self.data_n[n]))/span
+            else:
+                self.data_n[n] = 0.0
+        #one row of plots per criteria
+        for c in range(0,len(criteria)):
+            keep = np.zeros(len(self.data),dtype=bool)
+            keeps = self.categorize(criteria[c][0], criteria[c][1])
+            if criteria[c][2] == 'above':
+                keep = keeps[-1]
+            elif criteria[c][2] == 'between':
+                keep = keeps[1]
+            else:
+                keep = keeps[0]
+            data_PC = self.data_n[keep]
+            #boxplot
+            ax = fig.add_subplot(int(len(criteria)*100 + 10 + c + 1))
+            df = pd.DataFrame(data_PC,columns=self.names)
+            boxplot = df.boxplot(grid=False,column=column)
+            if criteria[c][2] == 'above':
+                ax.set_ylabel(criteria[c][0] + ' > %.1e (%.1f%%)' %(criteria[c][1][-1], 100.0*np.sum(keep)/len(keep)))
+            elif criteria[c][2] == 'between':
+                ax.set_ylabel('%.1e < ' %(criteria[c][1][0]) + criteria[c][0] + ' < %.1e (%.1f%%)' %(criteria[c][1][1], 100.0*np.sum(keep)/len(keep)))
+            else:
+                ax.set_ylabel(criteria[c][0] + ' < %.1e (%.1f%%)' %(criteria[c][1][0], 100.0*np.sum(keep)/len(keep)))
+            if c == 0:
+                #formatting
+                title = ''
+                print('\n*** BOXPLOT VALUE RANGES ***')
+                for n in column:
+                    if n == 'Pavg':
+                        print([n,np.min(self.Pavg),np.average(self.Pavg),np.max(self.Pavg)])
+                        title = title + '%s [%.2e,%.2e]; ' %(n, np.min(self.Pavg), np.max(self.Pavg))
+                    elif n == 'breakthrough':
+                        print([n,np.min(self.breakthrough),np.average(self.breakthrough),np.max(self.breakthrough)])
+                        title = title + '%s [%.2e,%.2e]; ' %(n, np.min(self.breakthrough), np.max(self.breakthrough))
+                    else:
+                        print([n,np.min(self.data[n]),np.average(self.data[n]),np.max(self.data[n])])
+                        title = title + '%s [%.2e,%.2e]; ' %(n, np.min(self.data[n]), np.max(self.data[n]))
+                ax.set_title(title, fontsize=6)
+        plt.tight_layout()
         
-# ****************************************************************************
-#### test program (i.e. script development)
-# ****************************************************************************         
-if False: #test program
-    geom = mesh()
-#    geom.rock.s3Azn = 0.0*deg
-#    geom.rock.s3Dip = 0.0*deg
-#    phi = 30.0*deg
-#    mcc = 0.0*MPa
-#    stress = cauchy()
-#    stress.set_sigG_from_Principal(geom.rock.s3, geom.rock.s2, geom.rock.s1, geom.rock.s3Azn, geom.rock.s3Dip)
-#    stress.plot_Pc(phi,mcc)
-#    print 'Pc for frac'
-#    print stress.Pc_frac(90.0*deg,90.0*deg,phi,mcc)
-    
-    #generate domain
-    geom.gen_domain()
-    
-#    #generate natural fractures
-#    geom.gen_natfracs(f_num=8,
-#                      f_dia = [1200.0,2400.0],
-#                      f_azn = [79.0*deg,8.0*deg], #[0.0*deg,3000.0*deg],#[79.0*deg,8.0*deg],
-#                      f_dip = [90.0*deg,12.5*deg]) #[90.0*deg,0.1*deg])#,12.5*deg])
-#    #generate natural fractures
-#    geom.gen_natfracs(f_num=80,
-#                      f_dia = [300.0,900.0],
-#                      f_azn = [79.0*deg,8.0*deg], #[0.0*deg,3000.0*deg],#[79.0*deg,8.0*deg],
-#                      f_dip = [90.0*deg,12.5*deg]) #[90.0*deg,0.1*deg])#,12.5*deg])
-    
-    #generate natural fractures
-    geom.gen_joint_sets()
-    
-    #generate wells
-    wells = []
-#    wells += [line(0.0-1.0*100.0,-300.0,0.0,600.0,0.0*deg,0.0*deg,'producer',0.2286,80.0)]
-#    wells += [line(0.0+0.0*100.0,-300.0,0.0,600.0,0.0*deg,0.0*deg,'injector',0.2286,80.0)]
-#    wells += [line(0.0+1.0*100.0,-300.0,0.0,600.0,0.0*deg,0.0*deg,'producer',0.2286,80.0)]
-    geom.gen_wells(True,wells)
-        
-#    #generate hydraulic fracture
-##    geom.dyn_stim(Vinj=100000.0,Qinj=0.08,dpp=-2.0*MPa,sand=0.3,leakoff=0.0,
-##                  target=1,clear=True,visuals=False,fname='stim')
-#    geom.dyn_stim(Vinj=100000.0,Qinj=0.08,
-#                  target=1,clear=True,visuals=False,fname='stim')
-#    
-#    #calculate normal flow
-#    geom.dyn_stim(Vinj=12614400.0,Qinj=0.02,
-#                  target=1,clear=False,visuals=False,fname='stim')
-    
-    #calculate injection and production after stimulation
-#    for i in range(0,len(geom.wells)):
-#        if (int(geom.wells[i].typ) in [typ('injector')]):
-#            target = int(i)
-#            geom.stim_and_flow(target=i,visuals=False,fname='run')
-    #random identifier (statistically should be unique)
+def EXAMPLE(pinj_limit=True):
     pin = np.random.randint(100000000,999999999,1)[0]
-    
-    geom.stim_and_flow(target=[],visuals=True,fname='run_%i' %(pin))
-    
-    #calculate heat transfer
-    geom.get_heat(plot=True)
-    
-    #show flow model
-    geom.build_vtk(fname='fin_%i' %(pin))
-#    geom.rock.stress.plot_Pc(geom.rock.phi[1],geom.rock.mcc[1])
-    
-    #save primary inputs and outputs
-    x = geom.save('inputs_results.txt',pin)
-    
-    #show plots
-    pylab.show()
-    
-#    #calculate flow
-#    bhp = geom.rock.BH_P #Pa
-#    dpp=-2.0*MPa
-#    pwp = bhp + dpp #Pa
-#    geom.get_flow(p_bound=bhp,q_inlet=[0.02],p_outlet=[pwp])
-#    
-#    #build result vtk
-#    geom.build_vtk('fin')
-
-    
-#    #calculate flow
-#    geom.get_flow()
-#        #standard fluid density
-#        rho = self.rock.PoreRho #kg/m3
-#        #bottom hole pressure, reservoir pore pressure
-#        bhp = self.rock.BH_P #Pa
-#        #production well pressure
-#        pwp = bhp + dpp #Pa
-#        #trial injection pressure
-#        tip = self.rock.s3 + 6.0*MPa #Pa
-#        #stim volume
-#        vol = 0.0 #m3
-#        
-#        #looping variables
-#        iters = 0
-#        maxit = 1
-#        while 1:
-#            #***   loop breaker   ***
-#            if iters >= maxit:
-#                break
-#            iters += 1
-#            print '-> rock stimulation step %i' %(iters)
-#            
-#            #***   pressure based stimulation   ***
-#            #solve flow with max pressure drive
-#            self.get_flow(p_bound=bhp,p_inlet=[tip],p_outlet=[pwp])    
-    
-#    #initialize model
-#    geom.re_init()
-#    
-#    #base parameter assignments
-#    geom.static_KQn()
-#    
-#    #geom.gen_domain()
-#    geom.build_vtk('test')
-
-
-
-# ****************************************************************************
-#### main program
-# ****************************************************************************
-if False: #main program
-    #create mesh object (the model)
-#    mnode = []
-#    mpipe = []
-#    mfrac = []
-#    mwell = []
-#    mhydf = []
-#    mboun = []
-#    mfrac = np.asarray(mfrac)
-#    geo = [None,None,None,None,None] #[natfracs, origin, intlines, points, wells]
-#    geo[0]=sg.mergeObj(geo[0], sg.cylObj(x0=np.asarray([0,0,0]), x1=np.asarray([0.1,0,0]), r=0.1))
-#    geo[1]=sg.mergeObj(geo[1], sg.cylObj(x0=np.asarray([0,0,0]), x1=np.asarray([20,0,0]), r=3.0))
-#    geo[1]=sg.mergeObj(geo[1], sg.cylObj(x0=np.asarray([0,0,0]), x1=np.asarray([0,20,0]), r=3.0))
-#    geo[1]=sg.mergeObj(geo[1], sg.cylObj(x0=np.asarray([0,0,0]), x1=np.asarray([0,0,20]), r=3.0))
-#    geo[2]=sg.mergeObj(geo[2], sg.cylObj(x0=np.asarray([0,0,0]), x1=np.asarray([0.1,0,0]), r=0.1))
-#    geo[3]=sg.mergeObj(geo[3], sg.cylObj(x0=np.asarray([0,0,0]), x1=np.asarray([0.1,0,0]), r=0.1))
-#    geo[4]=sg.mergeObj(geo[3], sg.cylObj(x0=np.asarray([0,0,0]), x1=np.asarray([0.1,0,0]), r=0.1))
-    geom = mesh() #node=mnode,pipe=mpipe,fracs=mfrac,wells=mwell,hydfs=mhydf,bound=mboun,geo3D=geo)
-    
-    #generate the domain
-    geom.gen_domain()
-    # >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-    #modify reservoir parameters as needed
-    geom.rock.size = 800.0 #m
-    geom.rock.ResDepth = 6000.0 # m
-    geom.rock.ResGradient = 50.0 #56.70 # C/km; average = 25 C/km
-    geom.rock.LifeSpan = 20.0 # Years
-    geom.rock.CasingIR = 0.0254*3.0 # m
-    geom.rock.CasingOR = 0.0254*3.5 # m
-    geom.rock.BoreOR = 0.0254*4.0 # m
-    geom.rock.PoreRho = 960.0 #kg/m3 starting guess
-    geom.rock.Poremu = 0.9*cP #Pa-s
-    geom.rock.Porek = 0.1*mD #m2
-    # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-    
-    #generate natural fractures
-    geom.gen_natfracs(f_num=40,
-                      f_dia = [300.0,1200.0],
-                      f_azn = [79.0*deg,8.0*deg], #[0.0*deg,3000.0*deg],#[79.0*deg,8.0*deg],
-                      f_dip = [90.0*deg,12.5*deg]) #[90.0*deg,0.1*deg])#,12.5*deg])
-    
-    #vary well spacing with N-S oriented wells
-    spacing = [400.0] #[100.0,200.0,300.0,400.0,500.0,600.0,700.0,800.0] #,300.0,400.0]
-    w_r_Es = []
-    w_i_Ps = []
-    w_P_os = []
-    w_p_hs = []
-    w_p_ms = []
-    first = True
-    for s in range(0,len(spacing)):
-        #generate wells
-        wells = []
-        #wells += [line(0.0+0.5*spacing[s],-300.0,0.0,600.0,0.0*deg,0.0*deg,'injector',0.2286,80.0)]
-        #wells += [line(0.0-0.5*spacing[s],-300.0,0.0,600.0,0.0*deg,0.0*deg,'producer',0.2286,80.0)]
-        wells += [line(0.0-1.0*spacing[s],-300.0,0.0,600.0,0.0*deg,0.0*deg,'producer',0.2286,80.0)]
-        wells += [line(0.0+0.0*spacing[s],-300.0,0.0,600.0,0.0*deg,0.0*deg,'injector',0.2286,80.0)]
-        wells += [line(0.0+1.0*spacing[s],-300.0,0.0,600.0,0.0*deg,0.0*deg,'producer',0.2286,80.0)]
-#        #injection well
-#        wells += [well(300.0,-200.0,0.0, 600.0, 324.0*deg, 0.0*deg,-1,0.2286,80.0)]
-#        #production well
-#        wells += [well(000.0,-400.0,0.0, 600.0, 324.0*deg, 0.0*deg,-2,0.2286,80.0)]
-        geom.gen_wells(wells)
-        
-        #generate fractures
-        geom.gen_stimfracs(target=1,perfs=2)
-
-        #re-initialize the geometry - building list of faces
-        geom.re_init()
-
-        #populate fracture properties
-        if first:
-            first = False
-            geom.static_KQn()
-
-        #generate pipes
-        geom.gen_pipes(plot=first)
-        
-        #test different flowrates
-        flows = [-0.040] #[-0.001,-0.005,-0.010,-0.015,-0.020,-0.025,-0.030,-0.035,-0.040,-0.045,-0.050,-0.055,-0.060,-0.065]
-        dpps = [-2.0*MPa]
-        p_hs = []
-        p_ms = []
-        p_Es = []
-        p_hms = []
-        p_mms = []
-        i_Ps = []
-        i_ms = []
-        b_hs = []
-        b_ms = []
-        b_Es = []
-        r_Es = []
-        P_os = []
-        
-        #calculate suitable production pressure
-        h_bh = geom.rock.BH_P/(geom.rock.PoreRho*g) #m
-        dpps = h_bh - np.asarray(dpps)/(geom.rock.PoreRho*g) #m
-        
-        for f in flows:
-            #set boundary conditions (m3/s) (Pa); 10 kg/s ~ 0.01 m3/s for water
-            geom.set_bcs(plot=False, 
-                         p_bound=h_bh, 
-                         q_inlet=[f], 
-                         p_outlet=[dpps,dpps])
-            
-            #calculate flow
-            geom.get_flow()
-            
-            #claculate heat transfer
-            geom.get_heat(plot=False,t_n=21)
-            p_hs += [geom.p_h]
-            p_ms += [geom.p_m]
-            p_hms += [geom.p_hm]
-            p_mms += [geom.p_mm]
-#            p_Es += [geom.p_E]
-            i_Ps += [geom.i_p]
-            i_ms += [geom.i_m]
-            b_hs += [geom.b_h]
-            b_ms += [geom.b_m]
-#            b_Es += [geom.b_E]
-            r_Es += [np.sum(geom.Et,axis=1)]
-            P_os += [geom.Pout]
-            
-            
-    #        #calculate power output
-    #        geom.get_power(detail=False)
-    #        P_os += [geom.Pout]
-        
-            #visualization
-            fname = 'flow%.3f_spacing%.1f_well%i' %(-f,spacing[s],len(wells))
-            geom.build_vtk(fname)
-            
-        #array format
-        p_hs = np.asarray(p_hs)
-        p_ms = np.asarray(p_ms)
-        p_hms = np.asarray(p_hms)
-        p_mms = np.asarray(p_mms)
-#        p_Es = np.asarray(p_Es)
-        i_Ps = np.asarray(i_Ps)
-        i_ms = np.asarray(i_ms)
-        b_hs = np.asarray(b_hs)
-        b_ms = np.asarray(b_ms)
-#        b_Es = np.asarray(b_Es)
-        r_Es = np.asarray(r_Es)
-        P_os = np.asarray(P_os)
-        
-        #store values for fancy plotting
-        w_r_Es = [r_Es]
-        w_i_Ps = [i_Ps]
-        w_P_os = [P_os]
-        w_p_hs = [p_hs]
-        w_p_ms = [p_ms]    
-                
-        #plot key variables
-        if True:
-            fig = pylab.figure(figsize=(8.0, 6.0), dpi=96, facecolor='w', edgecolor='k',tight_layout=True) # Medium resolution
-            
-            #mean production enthalpy
-            ax1 = fig.add_subplot(221)
-            for x in range(0,len(flows)):
-                lab = '%.3f m3/s' %(flows[x])
-                p_hm = p_hms[x]
-                ax1.plot(geom.ts[:-1]/yr,p_hm[:-1],linewidth=0.5,label=lab)
-            ax1.set_xlabel('Time (yr)')
-            ax1.set_ylabel('Production Enthalpy (kJ/kg)')
-            #ax1.legend(loc='upper right', prop={'size':8}, ncol=1, numpoints=1)
-            
-            #mean production energy
-            ax2 = fig.add_subplot(222)
-            for x in range(0,len(flows)):
-                lab = '%.3f m3/s' %(flows[x])
-                ax2.plot(geom.ts[:-1]/yr,P_os[x][:],linewidth=0.5,label=lab)
-            ax2.set_xlabel('Time (yr)')
-            ax2.set_ylabel('Production Energy (kJ/s)')
-            #ax2.legend(loc='upper right', prop={'size':8}, ncol=1, numpoints=1)
-            
-            #max injection pressure
-            ax3 = fig.add_subplot(223)
-            i_pm = []
-            for x in range(0,len(flows)):
-                np.asarray(i_Ps)
-                i_pm += [np.max(i_Ps[x,:])/MPa]
-            ax3.plot(-np.asarray(flows),i_pm,'-',linewidth=0.5)
-            ax3.set_xlabel('Injection Rate (m3/s)')
-            ax3.set_ylabel('Injection Pressure (MPa)')
-            #ax3.legend(loc='upper right', prop={'size':8}, ncol=1, numpoints=1)
-            
-            #total rock energy
-            ax4 = fig.add_subplot(224)
-            for x in range(0,len(flows)):
-                lab = '%.3f m3/s' %(flows[x])
-                ax4.plot(geom.ts/yr,r_Es[x],linewidth=0.5,label=lab)      
-            ax4.set_xlabel('Time (yr)')
-            ax4.set_ylabel('Rock Energy (kJ)')
-            ax4.legend(loc='upper left', prop={'size':8}, ncol=2, numpoints=1)
-            
-            #per well performance
-            NP = np.shape(p_hs)[1]
-            for x in range(0,len(flows)):
-                fig = pylab.figure(figsize=(8.0, 3.5), dpi=96, facecolor='w', edgecolor='k',tight_layout=True) # Medium resolution
-                #production enthalpy
-                ax1 = fig.add_subplot(121)
-                for y in range(0,NP):
-                    lab = 'P%i' %(y)
-                    ax1.plot(geom.ts[:-1]/yr,p_hs[x,y,:-1],linewidth=0.5,label=lab)
-                lab = 'Pnet'
-                ax1.plot(geom.ts[:-1]/yr,p_hms[x,:-1],linewidth=1.0,label=lab)
-                ax1.set_xlabel('Time (yr)')
-                ax1.set_ylabel('Production Enthalpy (kg/kJ)')
-                tit = 'Flow at %.3f m3/s' %(flows[x])
-                ax1.set_title(tit)
-                    
-                #production energy
-                ax2 = fig.add_subplot(122)
-                for y in range(0,NP):
-                    lab = 'P%i' %(y)
-                    ax1.plot(geom.ts[:-1]/yr,p_hs[x,y,:-1],linewidth=0.5,label=lab)
-                lab = 'Pnet'
-                ax2.plot(geom.ts[:-1]/yr,p_hms[x,:-1],linewidth=1.0,label=lab)
-                tit = 'Flow at %.3f m3/s' %(flows[x])
-                ax2.set_title(tit)
-                
-                
-            
-    pylab.show()
-
+    geom = mesh() #create the model object
+    #geom.rock.re_init() #used if rock properties are changed
+    geom.gen_domain() #place model boundaries
+    geom.gen_joint_sets()#place natural fractures
+    geom.re_init() #model initialization
+    if pinj_limit: geom.rock.pfinal_max = 0.9*geom.rock.s3 #used when injection pressure must be limited during circulation
+    geom.gen_wells(True,wells=[],style='EGS') #place wells
+    geom.dyn_stim(Vinj=geom.rock.Vinj,Qinj=geom.rock.Qinj,target=[],
+                                visuals=False,fname='run_%i' %(pin)) #stimulate and circulate using Qinj target fow rate
+    geom.get_heat(plot=True,detail=True,lapse=False)
+    plt.savefig('plt_%i.png' %(pin), format='png')
+    plt.close()
+    NPV, P, C, Q = geom.get_economics(detail=True) #calculate economics
+    geom.build_vtk(fname='fin_%i' %(pin),vtype=[1,1,1,1,1,1]) #3D visuals [wells, fractures, flowing fractures, nodes, pipes, boundaries]
+    aux = [['type_last',geom.faces[-1].typ],
+                        ['Pc_last',geom.faces[-1].Pc],
+                        ['sn_last',geom.faces[-1].sn],
+                        ['Pcen_last',geom.faces[-1].Pcen],
+                        ['Pmax_last',geom.faces[-1].Pmax],
+                        ['dia_last',geom.faces[-1].dia]]
+    geom.save('inputs_results.txt',pin,aux=aux,printwells=0,time=True) #save data
+    return geom
 
 
 
