@@ -35,10 +35,11 @@ for i in range(0,100):
     geom = gt.mesh()
     
     #GLADE design parameters to modify per batch run
-    geom.rock.w_count = 4 #production well #!!!
-    geom.rock.w_phase = 3*90.0*deg #3pi = above, 1pi = below #rad #!!!
-    geom.rock.perf_clusters = 6 #number of peforation clusters #!!!
+    geom.rock.w_count = 3 #production well #!!!
+    geom.rock.w_phase = 1*90.0*deg #3pi = above, 1pi = below #rad #!!!
+    geom.rock.perf_clusters = 1 #number of peforation clusters #!!!
     geom.rock.sand = 0.000 #0.044 #sand ratio in frac fluid by volume #!!!
+    geom.rock.w_intervals = 3 #int(np.random.uniform(1,7)) #!!!
     
     #rock properties
     geom.rock.size = 2500.0 #m                                                  #half-size of the modeling domain
@@ -79,7 +80,6 @@ for i in range(0,100):
     geom.rock.bh_bound = np.random.uniform(0.0001,0.001)
     geom.rock.f_roughness = [0.25**2,0.5**2,1.0] #np.random.uniform(0.25**2,1.0) #0.8
     #well parameters
-    geom.rock.w_intervals = 1 #int(np.random.uniform(1,7))
     geom.rock.w_azimuth = 75.0*deg #rad 
     geom.rock.w_dip = 45.0*deg #rad 
     geom.rock.w_proportion = 0.6 #m/m 
@@ -115,8 +115,8 @@ for i in range(0,100):
     geom.rock.perf_per_cluster = 3 #m #number of peforation clusters
     geom.rock.leakoff = 0.0 #Carter leakoff 
     geom.rock.dPp = -2.0*MPa #np.random.uniform(0.0*MPa,-3.0*MPa) #production well pressure drawdown 
-    geom.rock.dPi = 0.1*MPa 
-    geom.rock.stim_limit = 5 #5 
+    geom.rock.dPi = 0.02*MPa #0.1*MPa 
+    geom.rock.stim_limit = 1 #5 #5 
     geom.rock.Qstim = geom.rock.Qinj #m3/s 
     geom.rock.Vstim = 400.0 #100000.0 #m3
     geom.rock.pfinal_max = 999.9*MPa #Pa
@@ -156,7 +156,7 @@ for i in range(0,100):
     # ****************************************************************************
     
     #investigate different well spacings - uniform sampling
-    spacings = list(np.random.uniform(100.0,700.0,5))
+    spacings = list(np.random.uniform(400.0,600.0,5)) #!!!
     for s in spacings:
         #get original site parameters
         geom = []
@@ -168,15 +168,15 @@ for i in range(0,100):
         #***** generate wells ****** #!!!
         wells = []
         # geom.gen_wells(True,wells,style='AGS') #AGS designs
-        geom.gen_wells(True,wells,style='EGS') #EGS designs
-        # geom.gen_wells(True,wells,style='CGS') #CGS caged designs
+        # geom.gen_wells(True,wells,style='EGS') #EGS designs
+        geom.gen_wells(True,wells,style='IGS') #Isolated injectors
                
         #copy geometry with placed wells
         base = []
         base = copy.deepcopy(geom)      
         
         #investigate different flow rates - logarithmic sampling
-        flows = list((10.0**(np.random.uniform(np.log10(0.001),np.log10(0.5000),5)))/geom.rock.w_intervals)
+        flows = list((10.0**(np.random.uniform(np.log10(0.02),np.log10(0.20),5)))/geom.rock.w_intervals) #!!!
         for f in flows:
             #load geometry with wells placed
             geom = []
@@ -184,8 +184,8 @@ for i in range(0,100):
             #solve for stimulation and circulation at specified circulation rate Qinj
             geom.rock.Qinj = f 
             geom.rock.re_init()
-            # if True:
-            try: #normal workflow if solution is successful
+            if True:
+            # try: #normal workflow if solution is successful
                 geom.dyn_stim(Vinj=geom.rock.Vinj,Qinj=geom.rock.Qinj,target=[],
                                 visuals=False,fname='run_%i' %(pin))
                 geom.get_heat(plot=True,detail=True,lapse=False)
@@ -197,14 +197,16 @@ for i in range(0,100):
                 #save primary inputs and outputs
                 aux = []
                 geom.save('inputs_results.txt',pin,aux=aux,printwells=0,time=True)
-            # else:
-            except: #placeholder for failed models, bote that sometimes models fail for physical reasons (not just unhandled numerical errors)
+            else:
+            # except: #placeholder for failed models, bote that sometimes models fail for physical reasons (not just unhandled numerical errors)
                 #(note that failed models can signifiy a failed field test, so failures are a valid result)
                 print( 'solver failure!')
             #print first
             if (f == flows[0]) and (s == spacings[0]):
                 #geometry only for first run
-                geom.build_vtk(fname='fin_%i' %(pin),vtype=[1,0,1,1,1,0]) #wells, flowing fractures, nodes, pipes
+                geom.build_vtk(fname='fin_%i' %(pin),vtype=[1,0,1,1,0,0]) #well, flowing fractures, nodes
+            #pipes for all
+            geom.build_vtk(fname='fin_%i' %(pin),vtype=[0,0,0,0,1,0]) #pipes
             #new pin
             pin = np.random.randint(100000000,999999999,1)[0]
 

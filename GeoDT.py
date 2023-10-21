@@ -14,7 +14,9 @@ print('GeoDT_4.0.0')
 #### libraries
 # ****************************************************************************
 import numpy as np
-from scipy.linalg import solve
+from libs.scipy_linalg_solve import solve
+# from scipy.linalg import solve
+# import contextlib
 #from scipy.stats import lognorm
 import pylab
 import math
@@ -635,7 +637,7 @@ class surf:
 #line objects
 class line:
     def __init__(self,x0=0.0,y0=0.0,z0=0.0,length=1.0,azn=0.0*deg,dip=0.0*deg,w_type='pipe',
-                 ra=0.0254*3.0,rb=0.0254*3.5,rc=0.0254*3.5,rough=80.0):
+                 ra=0.0254*3.0,rb=0.0254*3.5,rc=0.0254*3.5,rough=80.0,pID=0):
         #position geometry
         self.c0 = np.asarray([x0, y0, z0]) #origin
         self.leg = length #length
@@ -651,6 +653,8 @@ class line:
         self.hydrofrac = False #was well already hydrofraced?
         self.completed = False #was well stimulation process completed?
         self.stabilize = False #was well flow stabilied?
+        #parent well index
+        self.pID = pID
 
 #node list object
 class nodes:
@@ -701,6 +705,7 @@ class pipes:
         self.W = [] #width
         self.typ = [] #property source type
         self.fID = [] #property source index
+        self.pID = [] #parent index
         self.K = [] #flow solver coefficient
         self.n = [] #flow solver exponent
         self.Dh = [] #hydraulic aperture/diameter
@@ -709,13 +714,14 @@ class pipes:
         self.hydrofraced = False #tracker for fracture initiation
         self.R0 = [] #thermal radius
     #add a pipe
-    def add(self, n0, n1, length, width, featTyp, featID, Dh=1.0, Dh_max=1.0, frict=1.0):
+    def add(self, n0, n1, length, width, featTyp, featID, Dh=1.0, Dh_max=1.0, frict=1.0, pID = 0):
         self.n0 += [n0]
         self.n1 += [n1]
         self.L += [length]
         self.W += [width]
         self.typ += [featTyp]
         self.fID += [featID]
+        self.pID += [pID]
         self.K += [1.0]
         self.n += [1.0]
         self.num = len(self.n0)
@@ -1482,7 +1488,7 @@ class mesh:
             p_obj = [] #pipes
             p_col = [] #pipes colors
             p_lab = [] #pipes color labels
-            p_lab = ['Pipe_Number','Type','Pipe_Flow_Rate_m3_s','Height_m','Length_m','Hydraulic_Aperture_mm','Max_Aperture_mm','Friction','ThermRadius_m']
+            p_lab = ['Pipe_Number','Type','Pipe_Flow_Rate_m3_s','Height_m','Length_m','Hydraulic_Aperture_mm','Max_Aperture_mm','Friction','ThermRadius_m','Parent_ID']
             p_0 = []
             p_1 = []
             p_2 = []
@@ -1492,6 +1498,7 @@ class mesh:
             p_6 = []
             p_7 = []
             p_8 = []
+            p_9 = []
             qs = np.asarray(self.q)
             if not qs.any():
                 qs = np.zeros(self.pipes.num)
@@ -1513,8 +1520,9 @@ class mesh:
                     p_6 += [self.pipes.Dh_max[i]*1000]
                     p_7 += [self.pipes.frict[i]]
                     p_8 += [self.pipes.R0[i]]
+                    p_9 += [self.pipes.pID[i]]
             #vtk file
-            p_col = [p_0,p_1,p_2,p_3,p_4,p_5,p_6,p_7,p_8]
+            p_col = [p_0,p_1,p_2,p_3,p_4,p_5,p_6,p_7,p_8,p_9]
             sg.writeVtk(p_obj, p_col, p_lab, vtkFile=(fname + '_flow.vtk'))
 
         #******   paint boundaries   ******
@@ -1758,7 +1766,7 @@ class mesh:
                 else:
                     print( 'error: pressure temperature point not identified')
                 
-    def add_flowpath(self, source, target, length, width, featTyp, featID, Dh=1.0, Dh_max=1.0, frict=1.0):
+    def add_flowpath(self, source, target, length, width, featTyp, featID, Dh=1.0, Dh_max=1.0, frict=1.0, pID = 0):
 #        #ignore if source == target
 #        if list(source) == list(target):
 #            return -1, -1
@@ -1777,7 +1785,7 @@ class mesh:
                     if self.pipes.n1[i] == so_n:
                         return -1, -1
         #add pipe
-        self.pipes.add(so_n, ta_n, length, width, featTyp, featID, Dh, Dh_max, frict)
+        self.pipes.add(so_n, ta_n, length, width, featTyp, featID, Dh, Dh_max, frict, pID)
         return so_n, ta_n
         
     #intersections of a line with a plane
@@ -1814,7 +1822,8 @@ class mesh:
                              sourceID,
                              Dh=dia,
                              Dh_max=dia,
-                             frict=self.wells[sourceID].rgh)
+                             frict=self.wells[sourceID].rgh,
+                             pID=self.wells[sourceID].pID)
             return False
         #for all target faces (except boundaries)
         for targetID in range(6,len(self.faces)): #!!! changed with gradient
@@ -1849,7 +1858,8 @@ class mesh:
                              sourceID,
                              Dh=dia,
                              Dh_max=dia,
-                             frict=self.wells[sourceID].rgh)
+                             frict=self.wells[sourceID].rgh,
+                             pID=self.wells[sourceID].pID)
             #return False
             return False
         #in case of intersections
@@ -1870,7 +1880,8 @@ class mesh:
                              sourceID,
                              Dh=dia,
                              Dh_max=dia,
-                             frict=self.wells[sourceID].rgh)
+                             frict=self.wells[sourceID].rgh,
+                             pID=self.wells[sourceID].pID)
             #intersection points
             i = 0
             for i in range(0,len(rs)-1):
@@ -1885,7 +1896,8 @@ class mesh:
                                      sourceID,
                                      Dh=self.rock.perf_dia,
                                      Dh_max=self.rock.perf_dia,
-                                     frict=self.rock.perf_per_cluster)
+                                     frict=self.rock.perf_per_cluster,
+                                     pID=self.wells[sourceID].pID)
                     #choke
                     self.add_flowpath(x_well[a[i]] + 0.5*offset,
                                      x_well[a[i]],
@@ -1895,7 +1907,8 @@ class mesh:
                                      i_frac[a[i]],
                                      Dh=self.faces[i_frac[a[i]]].bh,
                                      Dh_max=self.faces[i_frac[a[i]]].bh,
-                                     frict=self.faces[i_frac[a[i]]].roughness)
+                                     frict=self.faces[i_frac[a[i]]].roughness,
+                                     pID=self.wells[sourceID].pID)
                 #uncased = no perforation
                 else:
                     #choke (circumference of well * 3.0 * diameter = near well flow channel area dimensions, otherwise properties of the fracture)
@@ -1907,7 +1920,8 @@ class mesh:
                                      i_frac[a[i]],
                                      Dh=self.faces[i_frac[a[i]]].bh,
                                      Dh_max=self.faces[i_frac[a[i]]].bh,
-                                     frict=self.faces[i_frac[a[i]]].roughness)
+                                     frict=self.faces[i_frac[a[i]]].roughness,
+                                     pID=self.wells[sourceID].pID)
                 #fracture (use intercept to center length, but fix width to y at 1/2 cirle radius)
                 self.add_flowpath(x_well[a[i]],
                                  o_frac[a[i]],
@@ -1917,7 +1931,8 @@ class mesh:
                                  i_frac[a[i]],
                                  Dh=self.faces[i_frac[a[i]]].bh,
                                  Dh_max=self.faces[i_frac[a[i]]].bh,
-                                 frict=self.faces[i_frac[a[i]]].roughness)
+                                 frict=self.faces[i_frac[a[i]]].roughness,
+                                 pID=self.wells[sourceID].pID)
                 #well continued (+1.0 z offset to prevent non-real links from fracture to well without a choke)
                 self.add_flowpath(x_well[a[i]] + offset,
                                   x_well[a[i+1]] + offset,
@@ -1927,7 +1942,8 @@ class mesh:
                                   sourceID,
                                   Dh=dia,
                                   Dh_max=dia,
-                                  frict=self.wells[sourceID].rgh)
+                                  frict=self.wells[sourceID].rgh,
+                                  pID=self.wells[sourceID].pID)
                 #store fracture centerpoint node number
                 ck, cki = self.nodes.add(o_frac[a[i]])
                 self.faces[i_frac[a[i]]].ci = cki
@@ -1944,7 +1960,8 @@ class mesh:
                                  sourceID,
                                  Dh=self.rock.perf_dia,
                                  Dh_max=self.rock.perf_dia,
-                                 frict=self.rock.perf_per_cluster)
+                                 frict=self.rock.perf_per_cluster,
+                                 pID=self.wells[sourceID].pID)
                 #choke
                 self.add_flowpath(x_well[a[-1]] + 0.5*offset,
                                  x_well[a[-1]],
@@ -1954,7 +1971,8 @@ class mesh:
                                  i_frac[a[-1]],
                                  Dh=self.faces[i_frac[a[-1]]].bh,
                                  Dh_max=self.faces[i_frac[a[-1]]].bh,
-                                 frict=self.faces[i_frac[a[-1]]].roughness)
+                                 frict=self.faces[i_frac[a[-1]]].roughness,
+                                 pID=self.wells[sourceID].pID)
             #uncased = no perforation
             else:
                 #choke
@@ -1966,7 +1984,8 @@ class mesh:
                                  i_frac[a[-1]],
                                  Dh=self.faces[i_frac[a[-1]]].bh,
                                  Dh_max=self.faces[i_frac[a[-1]]].bh,
-                                 frict=self.faces[i_frac[a[-1]]].roughness)
+                                 frict=self.faces[i_frac[a[-1]]].roughness,
+                                 pID=self.wells[sourceID].pID)
             #last segment fracture
             self.add_flowpath(x_well[a[-1]],# + offset*0.5,
                              o_frac[a[-1]],
@@ -1976,7 +1995,8 @@ class mesh:
                              i_frac[a[i]],
                              Dh=self.faces[i_frac[a[-1]]].bh,
                              Dh_max=self.faces[i_frac[a[-1]]].bh,
-                             frict=self.faces[i_frac[a[-1]]].roughness)
+                             frict=self.faces[i_frac[a[-1]]].roughness,
+                             pID=self.wells[sourceID].pID)
             #dead end segment
             self.add_flowpath(x_well[a[-1]] + offset,
                               c1,
@@ -1986,7 +2006,8 @@ class mesh:
                               sourceID,
                               Dh=dia,
                               Dh_max=dia,
-                              frict=self.wells[sourceID].rgh)
+                              frict=self.wells[sourceID].rgh,
+                              pID=self.wells[sourceID].pID)
             #store fracture centerpoint node number
             ck, cki = self.nodes.add(o_frac[a[i]])
             self.faces[i_frac[a[-1]]].ci = cki
@@ -2261,6 +2282,8 @@ class mesh:
             self.wells = wells
         #EGS style placement
         elif (style == 'EGS') or (style == 'CGS'):
+            n = len(self.wells)
+            wells = self.wells
             #center
             i0 = np.asarray([0.0, 0.0, 0.0])
             #ref axes (parallel injector and 90 horizontal to the right)
@@ -2319,34 +2342,36 @@ class mesh:
             #wellheads
             h = np.asarray([0.0,0.0,self.rock.w_spacing])
             azn, dip, dis = azn_dip(iss+h,iss)
-            wells += [line(iss[0]+h[0],iss[1]+h[1],iss[2]+h[2],dis,azn,dip,'injector',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]
+            wells += [line(iss[0]+h[0],iss[1]+h[1],iss[2]+h[2],dis,azn,dip,'injector',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh,0+n)]
             for i in range(0,num):
                 azn, dip, dis = azn_dip(pss[i]+h,pss[i])
-                wells += [line(pss[i][0]+h[0],pss[i][1]+h[1],pss[i][2]+h[2],dis,azn,dip,'producer',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]     
+                wells += [line(pss[i][0]+h[0],pss[i][1]+h[1],pss[i][2]+h[2],dis,azn,dip,'producer',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh,1+i+n)]
             #place surface segments
             azn, dip, dis = azn_dip(iss,ibs)
-            wells += [line(iss[0],iss[1],iss[2],dis,azn,dip,'pipe',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]
+            wells += [line(iss[0],iss[1],iss[2],dis,azn,dip,'pipe',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh,0+n)]
             for i in range(0,num):
                 azn, dip, dis = azn_dip(pss[i],p1s[i])
-                wells += [line(pss[i][0],pss[i][1],pss[i][2],dis,azn,dip,'pipe',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]
+                wells += [line(pss[i][0],pss[i][1],pss[i][2],dis,azn,dip,'pipe',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh,1+i+n)]
             #place injector base segment
             azn, dip, dis = azn_dip(ibs,i1s[0])
-            wells += [line(ibs[0],ibs[1],ibs[2],dis,azn,dip,'pipe',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]
+            wells += [line(ibs[0],ibs[1],ibs[2],dis,azn,dip,'pipe',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh,0+n)]
             #place injection wells
             for i in range(0,seg-1):
                 azn, dip, dis = azn_dip(i1s[0],i2s[0])
-                wells += [line(i1s[i][0],i1s[i][1],i1s[i][2],dis,azn,dip,'perfcluster',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]
+                wells += [line(i1s[i][0],i1s[i][1],i1s[i][2],dis,azn,dip,'perfcluster',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh,0+n)]
                 azn, dip, dis2 = azn_dip(i2s[0],i1s[1])
-                wells += [line(i2s[i][0],i2s[i][1],i2s[i][2],dis2,azn,dip,'pipe',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]
+                wells += [line(i2s[i][0],i2s[i][1],i2s[i][2],dis2,azn,dip,'pipe',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh,0+n)]
             azn, dip, dis = azn_dip(i1s[-1],i2s[-1])
-            wells += [line(i1s[-1][0],i1s[-1][1],i1s[-1][2],dis,azn,dip,'perfcluster',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]
+            wells += [line(i1s[-1][0],i1s[-1][1],i1s[-1][2],dis,azn,dip,'perfcluster',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh,0+n)]
             #place production wells
             for i in range(0,num):
                 azn, dip, dis = azn_dip(p1s[i],p2s[i])
-                wells += [line(p1s[i][0],p1s[i][1],p1s[i][2],dis,azn,dip,'screen',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]
+                wells += [line(p1s[i][0],p1s[i][1],p1s[i][2],dis,azn,dip,'screen',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh,1+i+n)]
             #add to model domain
             self.wells = wells
         elif style == 'AGS': #closed loop geothermal
+            n = len(self.wells)
+            wells = self.wells
             segle = self.rock.ResDepth/20.0 #segment length, m
             separ = self.rock.w_spacing #well surface separation, m
             branc = int(self.rock.w_count/2) #single-sided number of branches (mirrored about center well) 
@@ -2363,8 +2388,8 @@ class mesh:
             #place injector and producer wells as the first two segments
             inje_c0 = np.asarray([-0.5*hori_r0*np.sin(azn),-0.5*hori_r0*np.cos(azn),orig_d0])
             prod_c0 = np.asarray([-(0.5*hori_r0-separ)*np.sin(azn),-(0.5*hori_r0-separ)*np.cos(azn),orig_d0])
-            wells += [line(inje_c0[0],inje_c0[1],inje_c0[2],segle,0.0*deg,90.0*deg,'injector',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]
-            wells += [line(prod_c0[0],prod_c0[1],prod_c0[2],segle,0.0*deg,90.0*deg,'producer',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]
+            wells += [line(inje_c0[0],inje_c0[1],inje_c0[2],segle,0.0*deg,90.0*deg,'injector',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh,0+n)]
+            wells += [line(prod_c0[0],prod_c0[1],prod_c0[2],segle,0.0*deg,90.0*deg,'producer',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh,1+n)]
             #segment information: i = injector; v = vertical; l = length; n = count
             ivl = self.rock.ResDepth - vert_z0 - segle
             ivn = int(ivl/segle) + 1
@@ -2378,61 +2403,63 @@ class mesh:
             oi = inje_c0 + np.asarray([0,0,-segle])
             ol = np.zeros(3,dtype=float)
             for b in range(0,ivn):
-                wells += [line(oi[0],oi[1],oi[2], ivl/ivn, 0.0*deg,90.0*deg, 'pipe',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]
+                wells += [line(oi[0],oi[1],oi[2], ivl/ivn, 0.0*deg,90.0*deg, 'pipe',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh,0+n)]
                 oi = oi + np.asarray([0.0,0.0,-ivl/ivn])
             ol = ol + oi
             for b in range(0,ihn):
-                wells += [line(oi[0],oi[1],oi[2], ihl/ihn, azn, dip, 'pipe',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]
+                wells += [line(oi[0],oi[1],oi[2], ihl/ihn, azn, dip, 'pipe',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh,0+n)]
                 oi = oi + vAxi*(ihl/ihn)
             #place producer segments
             op = prod_c0 + np.asarray([0,0,-segle])
             ou = np.zeros(3,dtype=float)
             for b in range(0,pvn):
-                wells += [line(op[0],op[1],op[2], pvl/pvn, 0.0*deg,90.0*deg, 'pipe',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]
+                wells += [line(op[0],op[1],op[2], pvl/pvn, 0.0*deg,90.0*deg, 'pipe',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh,1+n)]
                 op = op + np.asarray([0.0,0.0,-pvl/pvn])
             ou = ou + op
             for b in range(0,phn):
-                wells += [line(op[0],op[1],op[2], phl/phn, azn, dip, 'pipe',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]
+                wells += [line(op[0],op[1],op[2], phl/phn, azn, dip, 'pipe',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh,1+n)]
                 op = op + vAxi*(phl/phn)
             #place bottom hole connector
-            wells += [line(oi[0],oi[1],oi[2], offs_z0, 0.0*deg, -90.0*deg, 'pipe',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]
+            wells += [line(oi[0],oi[1],oi[2], offs_z0, 0.0*deg, -90.0*deg, 'pipe',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh,1+n)]
             #transverse vector
             vNor = np.cross(vAxi,np.asarray([0,0,1]))
             vNor = vNor/np.linalg.norm(vNor)
             #add branches
             for v in range(0,branc):
                 #add transverse elements
-                wells += [line(ou[0],ou[1],ou[2], separ*(v+1), azn+90.0*deg,0.0*deg,'pipe',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]
-                wells += [line(ou[0],ou[1],ou[2], separ*(v+1), azn-90.0*deg,0.0*deg,'pipe',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]
-                wells += [line(ol[0],ol[1],ol[2], separ*(v+1), azn+90.0*deg,0.0*deg,'pipe',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]
-                wells += [line(ol[0],ol[1],ol[2], separ*(v+1), azn-90.0*deg,0.0*deg,'pipe',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]
+                wells += [line(ou[0],ou[1],ou[2], separ*(v+1), azn+90.0*deg,0.0*deg,'pipe',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh,1+n)]
+                wells += [line(ou[0],ou[1],ou[2], separ*(v+1), azn-90.0*deg,0.0*deg,'pipe',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh,1+n)]
+                wells += [line(ol[0],ol[1],ol[2], separ*(v+1), azn+90.0*deg,0.0*deg,'pipe',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh,0+n)]
+                wells += [line(ol[0],ol[1],ol[2], separ*(v+1), azn-90.0*deg,0.0*deg,'pipe',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh,0+n)]
                 #place injector segments
                 oi = np.copy(ol) + vNor*separ*(v+1)
                 for b in range(0,ihn):
-                    wells += [line(oi[0],oi[1],oi[2], ihl/ihn, azn, dip, 'pipe',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]
+                    wells += [line(oi[0],oi[1],oi[2], ihl/ihn, azn, dip, 'pipe',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh,0+n)]
                     oi = oi + vAxi*(ihl/ihn)
                 #place producer segments
                 op = np.copy(ou) + vNor*separ*(v+1)
                 for b in range(0,phn):
-                    wells += [line(op[0],op[1],op[2], phl/phn, azn, dip, 'pipe',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]
+                    wells += [line(op[0],op[1],op[2], phl/phn, azn, dip, 'pipe',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh,1+n)]
                     op = op + vAxi*(phl/phn)
                 #place bottom connectors
-                wells += [line(oi[0],oi[1],oi[2], offs_z0, 0.0*deg, -90.0*deg, 'pipe',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]
+                wells += [line(oi[0],oi[1],oi[2], offs_z0, 0.0*deg, -90.0*deg, 'pipe',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh,1+n)]
                 #place injector segments
                 oi = np.copy(ol) - vNor*separ*(v+1)
                 for b in range(0,ihn):
-                    wells += [line(oi[0],oi[1],oi[2], ihl/ihn, azn, dip, 'pipe',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]
+                    wells += [line(oi[0],oi[1],oi[2], ihl/ihn, azn, dip, 'pipe',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh,0+n)]
                     oi = oi + vAxi*(ihl/ihn)
                 #place producer segments
                 op = np.copy(ou) - vNor*separ*(v+1)
                 for b in range(0,phn):
-                    wells += [line(op[0],op[1],op[2], phl/phn, azn, dip, 'pipe',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]
+                    wells += [line(op[0],op[1],op[2], phl/phn, azn, dip, 'pipe',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh,1+n)]
                     op = op + vAxi*(phl/phn)  
                 #place bottom connectors
-                wells += [line(oi[0],oi[1],oi[2], offs_z0, 0.0*deg, -90.0*deg, 'pipe',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]
+                wells += [line(oi[0],oi[1],oi[2], offs_z0, 0.0*deg, -90.0*deg, 'pipe',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh,1+n)]
             #add to model domain
             self.wells = wells
         else: #original placement module
+            n = len(self.wells)
+            wells = self.wells
             #center
             i0 = np.asarray([0.0, 0.0, 0.0])
             #ref axes (parallel injector and 90 horizontal to the right)
@@ -2477,24 +2504,44 @@ class mesh:
             #length of producers
             p1s = []
             p2s = []
-            for i in range(0,num):
-                p1s += [p0s[i] - 0.5*vPros[i]*pLen]
-                p2s += [p0s[i] + 0.5*vPros[i]*pLen]
+            for j in range(0,num):
+                p1s += [p0s[j] - 0.5*vPros[j]*pLen]
+                p2s += [p0s[j] + 0.5*vPros[j]*pLen]
             #place injection wells
             wells = []
-            azn, dip = azn_dip(i1s[0],i2s[0])
+            azn, dip, dis = azn_dip(i1s[0],i2s[0])
+            vAxi = np.asarray([math.sin(azn)*math.cos(-dip),math.cos(azn)*math.cos(-dip),math.sin(-dip)])
             for i in range(0,seg):
-                wells += [line(i1s[i][0],i1s[i][1],i1s[i][2],0.1*leg,-azn,dip,'injector',
-                               self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]
-                wells += [line(i1s[i][0],i1s[i][1],i1s[i][2],leg,azn,dip,'perfcluster',
-                               self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]
+                wells += [line(i1s[i][0],i1s[i][1],i1s[i][2],0.1*leg,azn,dip,'injector',
+                               self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh,i+n)]
+                i1s[i] = i1s[i] + vAxi*0.1*leg
             #place production wells
-            for i in range(0,num):
-                azn, dip = azn_dip(p1s[i],p2s[i])
-                wells += [line(p1s[i][0],p1s[i][1],p1s[i][2],0.1*pLen,-azn,dip,'producer',
-                               self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]
-                wells += [line(p1s[i][0],p1s[i][1],p1s[i][2],pLen,azn,dip,'screen',
-                               self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh)]
+            for j in range(0,num):
+                azn, dip, dis = azn_dip(p1s[j],p2s[j])
+                vAxi = np.asarray([math.sin(azn)*math.cos(-dip),math.cos(azn)*math.cos(-dip),math.sin(-dip)])
+                wells += [line(p1s[j][0],p1s[j][1],p1s[j][2],0.1*pLen,azn,dip,'producer',
+                               self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh,1+i+j+n)]
+                p1s[j] = p1s[j] + vAxi*0.1*pLen
+            #place injection perforations
+            for i in range(0,seg):
+                wells += [line(i1s[i][0],i1s[i][1],i1s[i][2],0.9*leg,azn,dip,'perfcluster',
+                               self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh,i+n)]
+            #place production screens
+            for j in range(0,num):
+                azn, dip, dis = azn_dip(p1s[j],p2s[j])
+                wells += [line(p1s[j][0],p1s[j][1],p1s[j][2],0.9*pLen,azn,dip,'screen',
+                               self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh,1+i+j+n)]
+            #dummy wells for surface conductors
+            azn, dip, dis = azn_dip(i1s[0],i2s[0])
+            vAxi = np.asarray([math.sin(azn)*math.cos(-dip),math.cos(azn)*math.cos(-dip),math.sin(-dip)])
+            i1s[0] = i1s[0] - vAxi*0.1*leg
+            wells += [line(i1s[0][0],i1s[0][1],i1s[0][2],self.rock.ResDepth-i1s[0][2],0.0,-90.0*deg,'pipe',
+                               self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh,0+n)]
+            for j in range(0,num):
+                azn, dip, dis = azn_dip(p1s[j],p2s[j])
+                p1s[j] = p1s[j] - vAxi*0.1*pLen
+                wells += [line(p1s[j][0],p1s[j][1],p1s[j][2],self.rock.ResDepth-p1s[j][2]+1.0,0.0,-90.0*deg,'pipe',
+                               self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh,1+i+j+n)]
             #add to model domain
             self.wells = wells
 
@@ -3844,13 +3891,17 @@ class mesh:
                             fi = len(self.hydfs)-notch-1
                             si = self.hydfs[fi].sn
                             self.hydfs[fi].make_critical(rock=self.rock,pres=(si+self.rock.hfmcc))
-                    #if insufficient pressure and insufficient rate or too many repeated stimulations, increase pressure
-                    elif ((nat_stim == False) or (((int(num_stim) + 1) % int(self.rock.stim_limit)) == 0)):
-                        dpi[i] += self.rock.dPi
-                        print( '   + (%i) pressure increased to %.3f, %.3f absolute' %(i,self.rock.s3+dpi[i],tip[i]+dpi[i]))
+                    #if insufficient pressure and insufficient rate or too many repeated stimulations, increase pressure #removed 10-20-23
+                    # elif ((nat_stim == False) or (((int(num_stim) + 1) % int(self.rock.stim_limit)) == 0)):
+                    #     dpi[i] += self.rock.dPi
+                    #     print( '   + (%i) pressure increased to %.3f, %.3f absolute' %(i,self.rock.s3+dpi[i],tip[i]+dpi[i])) 
                     if visuals:
                         t += [time_step]
                         P += [tip[i]]
+                #increase injection pressure every step (not incrementing when any natural fractures stimulated was yeilding poor results for multi-stage stimulation)
+                dpi[i] += self.rock.dPi   
+            print( '   + injection pressure increased to %.3f' %(self.rock.s3+dpi[-1]))
+                        
                 
             #update fracture network volume
             vol_old = vol_new
@@ -3914,9 +3965,9 @@ class mesh:
             if self.pipes.typ[j] == typ('choke'):
                 #get the well information
                 fID = self.pipes.fID[j]
-                wID = self.pipes.fID[j-1]
-                Qii = self.p_q[wID]
-                if (self.wells[wID].typ  == typ('injector')) or (self.wells[wID].typ  == typ('perfcluster')): # or (self.wells[wID].typ == typ('producer')):
+                #wID = self.pipes.fID[j-1]
+                wID = self.pipes.pID[j]
+                if (self.wells[wID].typ  == typ('injector')):
                     if (self.faces[fID].hydroprop):
                         stabilize[wID] = True
         
@@ -3927,7 +3978,8 @@ class mesh:
         #set injection boundary conditions using flow values, unless stable flow was never acheived (e.g., hydrofrac only)
         for i in range(0,i_div):
             Qii = self.p_q[i_key[i]]
-            if (stabilize[i]) or (Qii > 0.95*Qinj):
+            #if (stabilize[i]) or (Qii > 0.95*Qinj):
+            if (Qii > 0.95*Qinj):
                 q_well[i_key[i]] = Qinj
             else:
                 print('-> note: An injector is being given a pressure boundary condition when a flow boundary is preferred')
@@ -3945,7 +3997,8 @@ class mesh:
         #set injection boundary conditions using flow values, unless stable flow was never acheived (e.g., hydrofrac only)
         for i in range(0,i_div):
             Qii = self.p_q[i_key[i]]
-            if (stabilize[i]) or (Qii > 0.95*Qinj):
+            #if (stabilize[i]) or (Qii > 0.95*Qinj):
+            if (Qii > 0.95*Qinj):
                 q_well[i_key[i]] = Qinj
             else:
                 print('-> note: An injector is being given a pressure boundary condition when a flow boundary is preferred')
@@ -4363,6 +4416,7 @@ class visualization:
     #reset
     def reset(self):
         self.data = np.copy(self.orig)
+        print('original = %i rows, data %i rows' %(len(self.orig),len(self.data)))
         #restructure timeseries data
         self.LifeSpan = self.data['LifeSpan'][0]/yr
         self.TimeSteps = int(self.data['TimeSteps'][0])
@@ -4489,6 +4543,96 @@ class visualization:
                         title = title + '%s [%.2e,%.2e]; ' %(n, np.min(self.data[n]), np.max(self.data[n]))
                 ax.set_title(title, fontsize=6)
         plt.tight_layout()
+    #percentiles
+    def percentiles(self,save=''):
+        #cumulative NPV function
+        pavs = self.Pavg+0.0
+        pavs = np.sort(pavs)
+        cs = self.data['CapitalCost']+0.0
+        cs = np.sort(cs)
+        qs = self.data['QuakeRisk']+0.0
+        qs = np.sort(qs)
+        gs = self.data['GenerationCost']+0.0
+        gs = np.sort(gs)
+        ns = self.data['NetSales']+0.0
+        ns = np.sort(ns)
+        ms = self.data['MaxSales']+0.0
+        ms = np.sort(ms)
+        npvs = self.data['NPV']+0.0
+        npvs = np.sort(npvs)
+        cpms = self.data['CpM_net']+0.0
+        cpms = np.sort(cpms)
+        cpgs = self.data['CpM_gro']+0.0
+        cpgs = np.sort(cpgs)
+        cpts = self.data['CpM_the']+0.0
+        cpts = np.sort(cpts)
+        legs = self.data['drill_length']+0.0
+        legs = np.sort(legs)
+        MWh = 1e-3*self.data['NetSales']/self.data['sales_kWh']
+        other = self.data['NPV']+self.data['drill_m']*self.data['drill_length']-self.data['NetSales']
+        cpdl = (100.0*MWh + other)/self.data['drill_length']
+        cpdl = np.sort(cpdl)
+        
+        #collect percentiles
+        out = []
+        pcts = [0,1,5,10,15,20,25,30,35,40,45,50,55,60,65,70,75,80,85,90,95,99,100]
+        nums = len(self.data)
+        out += [['realizations', nums]]
+        for p in pcts:
+            out += [['pav%i' %(p), pavs[np.min([nums-1,int(1.0*nums*p/100)])]]]
+        for p in pcts:
+            out += [['C%i' %(p), cs[np.min([nums-1,int(1.0*nums*p/100)])]]]
+        for p in pcts:
+            out += [['Q%i' %(p), qs[np.min([nums-1,int(1.0*nums*p/100)])]]]
+        for p in pcts:
+            out += [['G%i' %(p), gs[np.min([nums-1,int(1.0*nums*p/100)])]]]
+        for p in pcts:
+            out += [['Snet%i' %(p), ns[np.min([nums-1,int(1.0*nums*p/100)])]]]
+        for p in pcts:
+            out += [['Smax%i' %(p), ms[np.min([nums-1,int(1.0*nums*p/100)])]]]
+        for p in pcts:
+            out += [['npv%i' %(p), npvs[np.min([nums-1,int(1.0*nums*p/100)])]]]
+        for p in pcts:
+            out += [['cpn%i' %(p), cpms[np.min([nums-1,int(1.0*nums*p/100)])]]]
+        for p in pcts:
+            out += [['cpg%i' %(p), cpgs[np.min([nums-1,int(1.0*nums*p/100)])]]]
+        for p in pcts:
+            out += [['cpt%i' %(p), cpts[np.min([nums-1,int(1.0*nums*p/100)])]]]
+        for p in pcts:
+            out += [['len%i' %(p), legs[np.min([nums-1,int(1.0*nums*p/100)])]]]
+        for p in pcts:
+            out += [['cpl%i' %(p), cpdl[np.min([nums-1,int(1.0*nums*p/100)])]]]
+        
+        #save to file
+        fname = save + '.csv'
+        out = list(map(list,zip(*out)))
+        head = out[0][0]
+        for i in range(1,len(out[0])):
+            head = head + ',' + out[0][i]
+        sdata = '%i' %(out[1][0])
+        for i in range(1,len(out[1])):          
+            if not out[1][i]:
+                sdata = sdata + ',0.0' # ',nan'
+            else:
+                sdata = sdata + ',%.5e' %(out[1][i])
+        try:
+            with open(fname,'r') as f:
+                test = f.readline()
+            f.close()
+            if test != '':
+                with open(fname,'a') as f:
+                    f.write(sdata + '\n')
+                f.close()
+            else:
+                with open(fname,'a') as f:
+                    f.write(head + '\n')
+                    f.write(sdata + '\n')
+                f.close()
+        except:
+            with open(fname,'a') as f:
+                f.write(head + '\n')
+                f.write(sdata + '\n')
+            f.close()
         
 def EXAMPLE(pinj_limit=True):
     pin = np.random.randint(100000000,999999999,1)[0]
