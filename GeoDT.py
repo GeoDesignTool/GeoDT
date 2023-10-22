@@ -2281,7 +2281,7 @@ class mesh:
         if len(wells) > 0:
             self.wells = wells
         #EGS style placement
-        elif (style == 'EGS') or (style == 'CGS'):
+        elif (style == 'EGS'):
             n = len(self.wells)
             wells = self.wells
             #center
@@ -2457,7 +2457,7 @@ class mesh:
                 wells += [line(oi[0],oi[1],oi[2], offs_z0, 0.0*deg, -90.0*deg, 'pipe',self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh,1+n)]
             #add to model domain
             self.wells = wells
-        else: #original placement module
+        else: #XGS well placement (default)
             n = len(self.wells)
             wells = self.wells
             #center
@@ -2507,6 +2507,8 @@ class mesh:
             for j in range(0,num):
                 p1s += [p0s[j] - 0.5*vPros[j]*pLen]
                 p2s += [p0s[j] + 0.5*vPros[j]*pLen]
+            #depth to model origin
+            oDepth = self.rock.ResDepth + i2s[-1][2]            
             #place injection wells
             wells = []
             azn, dip, dis = azn_dip(i1s[0],i2s[0])
@@ -2514,33 +2516,28 @@ class mesh:
             for i in range(0,seg):
                 wells += [line(i1s[i][0],i1s[i][1],i1s[i][2],0.1*leg,azn,dip,'injector',
                                self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh,i+n)]
-                i1s[i] = i1s[i] + vAxi*0.1*leg
-            #place production wells
+            #place production well surface segments
             for j in range(0,num):
-                azn, dip, dis = azn_dip(p1s[j],p2s[j])
-                vAxi = np.asarray([math.sin(azn)*math.cos(-dip),math.cos(azn)*math.cos(-dip),math.sin(-dip)])
-                wells += [line(p1s[j][0],p1s[j][1],p1s[j][2],0.1*pLen,azn,dip,'producer',
+                extra = 0.05*self.rock.ResDepth
+                wells += [line(p1s[j][0],p1s[j][1],oDepth+extra,extra,0.0,90*deg,'producer',
                                self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh,1+i+j+n)]
-                p1s[j] = p1s[j] + vAxi*0.1*pLen
-            #place injection perforations
+            #place injection well lower segments
+            wells += [line(i1s[0][0],i1s[0][1],oDepth,oDepth-i1s[0][2],0.0,90.0*deg,'pipe',
+                               self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh,0+n)]
+            #place perforation clusters
             for i in range(0,seg):
+                i1s[i] = i1s[i] + vAxi*0.1*leg
                 wells += [line(i1s[i][0],i1s[i][1],i1s[i][2],0.9*leg,azn,dip,'perfcluster',
                                self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh,i+n)]
-            #place production screens
+            #place production well lower segments
             for j in range(0,num):
-                azn, dip, dis = azn_dip(p1s[j],p2s[j])
-                wells += [line(p1s[j][0],p1s[j][1],p1s[j][2],0.9*pLen,azn,dip,'screen',
+                #vertical
+                wells += [line(p1s[j][0],p1s[j][1],oDepth,oDepth-p1s[j][2],0.0,90.0*deg,'pipe',
                                self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh,1+i+j+n)]
-            #dummy wells for surface conductors
-            azn, dip, dis = azn_dip(i1s[0],i2s[0])
-            vAxi = np.asarray([math.sin(azn)*math.cos(-dip),math.cos(azn)*math.cos(-dip),math.sin(-dip)])
-            i1s[0] = i1s[0] - vAxi*0.1*leg
-            wells += [line(i1s[0][0],i1s[0][1],i1s[0][2],self.rock.ResDepth-i1s[0][2],0.0,-90.0*deg,'pipe',
-                               self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh,0+n)]
-            for j in range(0,num):
+                #inclined
                 azn, dip, dis = azn_dip(p1s[j],p2s[j])
-                p1s[j] = p1s[j] - vAxi*0.1*pLen
-                wells += [line(p1s[j][0],p1s[j][1],p1s[j][2],self.rock.ResDepth-p1s[j][2]+1.0,0.0,-90.0*deg,'pipe',
+                vAxi = np.asarray([math.sin(azn)*math.cos(-dip),math.cos(azn)*math.cos(-dip),math.sin(-dip)])
+                wells += [line(p1s[j][0],p1s[j][1],p1s[j][2],pLen,azn,dip,'screen',
                                self.rock.ra,self.rock.rb,self.rock.rc,self.rock.rgh,1+i+j+n)]
             #add to model domain
             self.wells = wells
@@ -4577,7 +4574,8 @@ class visualization:
         out = []
         pcts = [0,1,5,10,15,20,25,30,35,40,45,50,55,60,65,70,75,80,85,90,95,99,100]
         nums = len(self.data)
-        out += [['realizations', nums]]
+        out += [['orig', len(self.orig)]]
+        out += [['data', nums]]
         for p in pcts:
             out += [['pav%i' %(p), pavs[np.min([nums-1,int(1.0*nums*p/100)])]]]
         for p in pcts:
