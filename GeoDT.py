@@ -2731,6 +2731,7 @@ class mesh:
             ml = mt*(1.0-x2)
             mi = self.i_mm
             Vt = (v5*mt)*(1000*60) # L/min
+            Vi = (v5*mi)*(1000*60) # L/min
             # Pumping power
             Pump = 0.0
             if mi > mt:
@@ -2793,10 +2794,11 @@ class mesh:
             print( '*** Binary Cycle Thermal State Values ***')
             print( ("Steam: Ti= %.2f; Pi= %.2f; hi= %.2f -> To= %.2f, Po= %.2f, ho= %.2f, n =%.3f" %(TBis,PBis,hBis,TBo,PBo,hBo,nBs)))
             print( ("Brine: Ti= %.2f; Pi= %.2f; hi= %.2f -> To= %.2f, Po= %.2f, ho= %.2f, n =%.3f" %(TBil,PBil,hBil,TBo,PBo,hBo,nBl)))
-            print( '*** Power Output Estimation ***')            
+            print( '*** Power Output Estimation ***')     
+            print( "Injection Rate = %.2f kg/s = %.2f L/min" %(mi, Vi))
+            print( "Production Rate = %.2f kg/s = %.2f L/min" %(mt, Vt))
             print( "Turbine Flow Rate = %.2f kg/s" %(ms))
             print( "Bypass Flow Rate = %.2f kg/s" %(ml))
-            print( "Well Flow Rate = %.2f kg/s = %.2f L/min" %(mt, Vt))
             print( "Flash Power at %.2f kW" %(Flash))
             print( "Binary Power at %.2f kW" %(Binary))
             print( "Pumping Power at %.2f kW" %(Pump))
@@ -4018,6 +4020,7 @@ class mesh:
                 print('** ERROR: Pressures are excessive so final flow is invalid')
             elif stabilize[i]:
                 self.nodes.p[j] = tip[i]
+                self.p_p[i_key[i]] = self.nodes.p[j]
                 Pi += [tip[i]]
             else:
                 Pi += [self.nodes.p[j]]
@@ -4396,10 +4399,16 @@ class visualization:
     #data filter
     def multifilter(self,target='pin',compare=None,vs=[0.0,1e12]):
         keep = np.ones(len(self.data),dtype=bool)
-        if compare:
-            keep = (self.data[target] < vs[1]*self.data[compare]) * (self.data[target] > vs[0]*self.data[compare])
+        if target == 'Pavg':
+            if compare:
+                keep = (self.Pavg < vs[1]*self.data[compare]) * (self.Pavg > vs[0]*self.data[compare])
+            else:
+                keep = (self.Pavg < vs[1]) * (self.Pavg > vs[0])
         else:
-            keep = (self.data[target] < vs[1]) * (self.data[target] > vs[0])
+            if compare:
+                keep = (self.data[target] < vs[1]*self.data[compare]) * (self.data[target] > vs[0]*self.data[compare])
+            else:
+                keep = (self.data[target] < vs[1]) * (self.data[target] > vs[0])
         self.data = self.data[keep]
         self.data_n = self.data_n[keep]
         self.Pavg = self.Pavg[keep]
