@@ -23,7 +23,7 @@ um2cm = gt.um2cm
 gal = 1.0/264.172 #m3
 
 #global parameter uncertainty randomizer & site specifications
-for i in range(0,100):
+for i in range(0,1):
     # ****************************************************************************
     #### model setup: UTAH FORGE --- DATA FROM MULTIPLE SOURCES
     # ****************************************************************************
@@ -37,9 +37,9 @@ for i in range(0,100):
     #GLADE design parameters to modify per batch run
     geom.rock.w_count = 3 #production well #!!!
     geom.rock.w_phase = 1*90.0*deg #3pi = above, 1pi = below #rad #!!!
-    geom.rock.perf_clusters = 1 #number of peforation clusters #!!!
+    geom.rock.perf_clusters = 3 #number of peforation clusters #!!!
     geom.rock.sand = 0.000 #0.044 #sand ratio in frac fluid by volume #!!!
-    geom.rock.w_intervals = 3 #int(np.random.uniform(1,7)) #!!!
+    geom.rock.w_intervals = 6 #int(np.random.uniform(1,7)) #!!!
     
     #rock properties
     geom.rock.size = 2500.0 #m                                                  #half-size of the modeling domain
@@ -63,6 +63,9 @@ for i in range(0,100):
     geom.rock.fNum = np.asarray([int(np.random.uniform(40,80)),
                             int(np.random.uniform(20,40)),
                             int(np.random.uniform(10,20))],dtype=int) #count
+    geom.rock.fNum = np.asarray([int(np.random.uniform(0,0)),
+                            int(np.random.uniform(0,0)),
+                            int(np.random.uniform(0,0))],dtype=int) #count
     geom.rock.fDia = np.asarray([[300.0,3000.0],
                             [300.0,3000.0],
                             [300.0,3000.0]],dtype=float) #m
@@ -70,6 +73,7 @@ for i in range(0,100):
     geom.rock.gamma = np.asarray([10.0**-3.0,10.0**-2.0,10.0**-1.2])
     geom.rock.n1 = np.asarray([1.0,1.0,1.0])
     geom.rock.a = np.asarray([0.000,0.200,0.800])
+    geom.rock.a = np.asarray([0.000,0.0025,0.0050])
     geom.rock.b = np.asarray([0.999,1.0,1.001])
     geom.rock.N = np.asarray([0.0,0.6,2.0])
     geom.rock.alpha = np.asarray([2.0e-9,2.9e-8,10.0e-8])
@@ -81,9 +85,10 @@ for i in range(0,100):
     geom.rock.f_roughness = [0.25**2,0.5**2,1.0] #np.random.uniform(0.25**2,1.0) #0.8
     #well parameters
     geom.rock.w_azimuth = 75.0*deg #rad 
-    geom.rock.w_dip = 45.0*deg #rad 
+    geom.rock.w_dip = 15.0*deg #45.0*deg #rad 
     geom.rock.w_proportion = 0.6 #m/m 
     geom.rock.w_length = (1200.0/np.sin(geom.rock.w_dip))/geom.rock.w_proportion #m 
+    geom.rock.w_length = 1600.0/geom.rock.w_proportion #m
     geom.rock.w_toe = 0.0*deg #np.random.uniform(-5.0,5.0)*deg #rad 
     geom.rock.w_skew = 0.0*deg #np.random.uniform(-10.0,10.0)*deg #rad 
     # geom.rock.ra = 0.06985 #m 
@@ -147,16 +152,16 @@ for i in range(0,100):
     site = copy.deepcopy(geom)
     #print the fracture geometry
     geom.re_init()
-    geom.build_vtk(fname='start%i' %(pin),vtype=[0,1,0,0,0,0]) #show natural fractures
+    geom.build_vtk(fname='start_%i' %(pin),vtype=[0,1,0,0,0,0]) #show natural fractures
     if (i == 0):
-        geom.build_vtk(fname='start%i' %(pin),vtype=[0,0,0,0,0,1]) #show model boundary
+        geom.build_vtk(fname='start_%i' %(pin),vtype=[0,0,0,0,0,1]) #show model boundary
             
     # ****************************************************************************
     #### varied design parameters
     # ****************************************************************************
     
     #investigate different well spacings - uniform sampling
-    spacings = list(np.random.uniform(400.0,600.0,5)) #!!!
+    spacings = list(np.random.uniform(400.0,600.0,1)) #!!!
     for s in spacings:
         #get original site parameters
         geom = []
@@ -176,7 +181,7 @@ for i in range(0,100):
         base = copy.deepcopy(geom)      
         
         #investigate different flow rates - logarithmic sampling
-        flows = list((10.0**(np.random.uniform(np.log10(0.02),np.log10(0.20),5)))/geom.rock.w_intervals) #!!!
+        flows = list((10.0**(np.random.uniform(np.log10(0.10),np.log10(0.12),1)))/geom.rock.w_intervals) #!!!
         for f in flows:
             #load geometry with wells placed
             geom = []

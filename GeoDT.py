@@ -876,7 +876,7 @@ class mesh:
         stim = False
         
         #check if fracture will be stimulated
-        if (self.faces[f_id].Pmax >= self.faces[f_id].Pc):
+        if (self.faces[f_id].Pmax >= self.faces[f_id].Pc) and (not(fix)):
             self.faces[f_id].stim += 1
             stim = True
             print( '-> fracture stimulated: %i' %(f_id))
@@ -885,7 +885,7 @@ class mesh:
         e_max = self.faces[f_id].sn - self.faces[f_id].Pmax
         
         #original bd0
-        bd0 = self.faces[f_id].bd0
+        bd0 = np.max([1.0e-9,self.faces[f_id].bd0])
 
         #stimulation enabled
         if stim and not(fix):
@@ -932,8 +932,10 @@ class mesh:
         #propped closure with ideal loose spherical packing (Allen, 1985; Frings et al., 2011)
         prop_load = np.max([0.0,self.faces[f_id].prop_load])
         bd0p = (prop_load/0.64)/(0.25*np.pi*self.faces[f_id].dia**2.0)
+        bd0p = np.max([1e-9,bd0p])
         #closure pressure onto a proppant pack
         e_crit = (bd0p*np.pi*self.rock.ResE)/(-8.0*(1.0-self.rock.Resv**2.0)*f_radius)
+        e_crit = np.min([-1e-3,e_crit])
         #hydropropped fracture with proppant pillars
         if (e_max < e_crit):
             #maximum aperture from Sneddon's (PKN) penny fracture aperture
@@ -982,6 +984,12 @@ class mesh:
         #override for boundary fractures
         if (int(self.faces[f_id].typ) in [typ('boundary')]):
             bh = self.rock.bh_bound
+        
+        #overrides for bad math
+        if not(np.isfinite(bh)):
+            bh = 1e-9
+        elif bh < 1e-9:
+            bh = 1e-9
         
         #volume
         vol = (4.0/3.0)*pi*0.25*self.faces[f_id].dia**2.0*0.5*bd
@@ -1893,7 +1901,8 @@ class mesh:
                                      self.wells[sourceID].rc-self.wells[sourceID].ra,
                                      self.rock.perf_dia,
                                      typ('perf'),
-                                     sourceID,
+                                     #sourceID,
+                                     i_frac[a[i]],
                                      Dh=self.rock.perf_dia,
                                      Dh_max=self.rock.perf_dia,
                                      frict=self.rock.perf_per_cluster,
@@ -1957,7 +1966,8 @@ class mesh:
                                  self.wells[sourceID].rc-self.wells[sourceID].ra,
                                  self.rock.perf_dia,
                                  typ('perf'),
-                                 sourceID,
+                                 #sourceID,
+                                 i_frac[a[i]],
                                  Dh=self.rock.perf_dia,
                                  Dh_max=self.rock.perf_dia,
                                  frict=self.rock.perf_per_cluster,
@@ -3814,7 +3824,7 @@ class mesh:
             #get max pressure on each fracture from all the nodes associated with that fracture
             face_pmax = np.ones(len(self.faces),dtype=float)*bhp
             for i in range(0,self.pipes.num):
-                if (int(self.pipes.typ[i]) in [typ('boundary'),typ('fracture'),typ('propped'),typ('choke')]): #don't confuse well ID with face ID
+                if (int(self.pipes.typ[i]) in [typ('boundary'),typ('fracture'),typ('propped'),typ('choke'),typ('perf')]): #don't confuse well ID with face ID
                     face_pmax[self.pipes.fID[i]] = np.max([face_pmax[self.pipes.fID[i]], self.nodes.p[self.pipes.n0[i]], self.nodes.p[self.pipes.n1[i]]])
             #update fracture properties; stimulate fractures; grow fractures; calculate new fracture volume
             if visuals:
@@ -3910,127 +3920,175 @@ class mesh:
                 ts += [t]
                 Ps += [P]
         
-        #@@@
-        print( '\n[B] Final flow solve')
+        print( '\n[B] Final flow solve (v2)')
+        #working variables
+        Qis = [] #array of flows
+        Pis = [] #array of pressures
+        self.iters = 0 #number of iterations
         
-        #***** reset pressures and fracture geometry
-        for i in range(0,len(self.faces)):
-            self.faces[i].Pmax = bhp
-            self.faces[i].Pcen = bhp
-            # self.GR_bh(i,fix=True)
-            self.hydromech(i,fix=True)
-        
-        #***** final pressure calculation to set facture apertures
-        print( '1: Pressure boundary conditions with stimulation disabled -> get fracture apertures')
-        #fixed pressure solve
-        q_well = np.full(len(self.wells),None)
-        p_well = np.full(len(self.wells),None)
-        #set injection boundary conditions using maximum values
-        for i in range(0,i_div):
-            tip[i] = self.rock.s3 + dpi[i]
-            #limit pressure if commanded to do so
-            if tip[i] > pfinal_max:
-                tip[i] = pfinal_max
-            p_well[i_key[i]] = tip[i]
-        #set production boundary conditions
-        for i in range(0,p_div):
-            p_well[p_key[i]] = pwp
-            
-        #solve flow
-        self.get_flow(p_bound=bhp,p_well=p_well,q_well=q_well,reinit=False,Qnom=Qinj)
-        if visuals:
-            fname2 = fname + '_B1'
-            self.build_vtk(fname2,vtype=[0,0,1,1,1,0])        
-        
-        #get max pressure on each fracture from all the nodes associated with that fracture
-        face_pmax = np.ones(len(self.faces),dtype=float)*bhp
-        for i in range(0,self.pipes.num):
-            if (int(self.pipes.typ[i]) in [typ('boundary'),typ('fracture'),typ('propped'),typ('choke')]): #don't confuse well ID with face ID
-                face_pmax[self.pipes.fID[i]] = np.max([face_pmax[self.pipes.fID[i]], self.nodes.p[self.pipes.n0[i]], self.nodes.p[self.pipes.n1[i]]])
-        #update fracture properties without stimualtion
-        for i in range(0,len(self.faces)):
-            #record maximum and center node pressures
-            self.faces[i].Pmax = face_pmax[i]
-            self.faces[i].Pcen = self.nodes.p[self.faces[i].ci]
-            #compute fracture properties
-            # self.GR_bh(i,fix=True)
-            self.hydromech(i,fix=True)
-        
-        #***** flag unstable hydropropped scenarios
-        #... if any fractures connected to the injector are hydropropped, stabilization is required 
-        #search by pipes (chokes give fracture id, connectors give well id)
-        for j in range(0,self.pipes.num):
-            #find the choke elements
-            if self.pipes.typ[j] == typ('choke'):
-                #get the well information
-                fID = self.pipes.fID[j]
-                #wID = self.pipes.fID[j-1]
-                wID = self.pipes.pID[j]
-                if (self.wells[wID].typ  == typ('injector')):
-                    if (self.faces[fID].hydroprop):
-                        stabilize[wID] = True
-        
-        #***** flow rate solve for heat transfer solution
-        print( '2: First flow boundary conditions with stimulation disabled -> get flow in network')
-        q_well = np.full(len(self.wells),None)
-        p_well = np.full(len(self.wells),None)
-        #set injection boundary conditions using flow values, unless stable flow was never acheived (e.g., hydrofrac only)
-        for i in range(0,i_div):
-            Qii = self.p_q[i_key[i]]
-            #if (stabilize[i]) or (Qii > 0.95*Qinj):
-            if (Qii > 0.95*Qinj):
-                q_well[i_key[i]] = Qinj
-            else:
-                print('-> note: An injector is being given a pressure boundary condition when a flow boundary is preferred')
+        #calculate flow with sequentially-coupled stress-sensitive mechanics
+        def get_HM_flow(self,try_pinj,fix=True):
+            self.iters += 1
+            #get max pressure on each fracture from all the nodes associated with that fracture
+            face_pmax = np.ones(len(self.faces),dtype=float)*bhp
+            for i in range(0,self.pipes.num):
+                if (int(self.pipes.typ[i]) in [typ('boundary'),typ('fracture'),typ('propped'),typ('choke'),typ('perf')]): #don't confuse well ID with face ID
+                    face_pmax[self.pipes.fID[i]] = np.max([face_pmax[self.pipes.fID[i]], self.nodes.p[self.pipes.n0[i]], self.nodes.p[self.pipes.n1[i]]])
+            #update fracture properties without stimualtion using the maximum nodal pressure (note: using average or anything else gives bad results when hydropropped)
+            for i in range(0,len(self.faces)):
+                #record maximum and center node pressures
+                self.faces[i].Pmax = face_pmax[i]
+                self.faces[i].Pcen = self.nodes.p[self.faces[i].ci]
+                #compute fracture properties
+                self.hydromech(i,fix)                
+            #set injection pressure boundary conditions
+            q_well = np.full(len(self.wells),None)
+            p_well = np.full(len(self.wells),None)
+            for i in range(0,i_div):
+                tip[i] = try_pinj[i]
+                if tip[i] > pfinal_max:
+                    tip[i] = pfinal_max
                 p_well[i_key[i]] = tip[i]
-        #set production boundary conditions
-        for i in range(0,p_div):
-            p_well[p_key[i]] = pwp
-        #solve flow
-        self.get_flow(p_bound=bhp,p_well=p_well,q_well=q_well,reinit=False,useprior=True,Qnom=Qinj)
+            #set production well pressure boundary conditions
+            for i in range(0,p_div):
+                p_well[p_key[i]] = pwp
+            #solve flow
+            self.get_flow(p_bound=bhp,p_well=p_well,q_well=q_well,reinit=False,Qnom=Qinj)
+            if visuals:
+                fname2 = fname + '_B%i' %(self.iters)
+                self.build_vtk(fname2,vtype=[0,0,1,1,1,0])
+            #record flow rate and pressure
+            Pii = []
+            for i in range(0,i_div):
+                source = self.wells[i_key[i]].c0
+                ck, j = self.nodes.add(source)
+                Pii += [self.nodes.p[j]] 
+            Qii = self.p_q[i_key]
+            Pii = np.asarray(Pii)
+            return Qii, Pii
         
-        #***** repeated solution to prevent extreme high flow errors
-        print( '3: Second flow boundary conditions with stimulation disabled -> get flow in network')
-        q_well = np.full(len(self.wells),None)
-        p_well = np.full(len(self.wells),None)
-        #set injection boundary conditions using flow values, unless stable flow was never acheived (e.g., hydrofrac only)
-        for i in range(0,i_div):
-            Qii = self.p_q[i_key[i]]
-            #if (stabilize[i]) or (Qii > 0.95*Qinj):
-            if (Qii > 0.95*Qinj):
-                q_well[i_key[i]] = Qinj
-            else:
-                print('-> note: An injector is being given a pressure boundary condition when a flow boundary is preferred')
-                p_well[i_key[i]] = tip[i]
-        #set production boundary conditions
-        for i in range(0,p_div):
-            p_well[p_key[i]] = pwp
-        #solve flow
-        self.get_flow(p_bound=bhp,p_well=p_well,q_well=q_well,reinit=False,useprior=True,Qnom=Qinj)
+        #***** [-1] give it an extra kick
+        print( '*: Final kick')
+        #reset nodal pressures
+        self.nodes.p = bhp + 1.0*MPa*np.random.rand(self.nodes.num)
+        #calculate injection rate and pressures
+        try_pinj = np.min(np.asarray([self.rock.s3*np.ones(i_div) + self.rock.hfmcc + 2*39.0*self.rock.dPi,
+                                      self.rock.pfinal_max*np.ones(i_div)]),axis=0)
+        Qi, Pi = get_HM_flow(self,try_pinj) #1st solve - low flow
+        Qi, Pi = get_HM_flow(self,try_pinj,False) #2nd solve - high flow
         
-        #***** solver overrides for key inputs and outputs
-        Pi = []
-        Qi = []
-        for i in range(0,i_div):
-            #locate injection node
-            source = self.wells[i_key[i]].c0
-            ck, j = self.nodes.add(source)
-            #bad solution if injection pressures are excessive
-            if self.nodes.p[j] > 1.05*tip[i]:
-                print('** ERROR: Pressures are excessive so final flow is invalid')
-            elif stabilize[i]:
-                self.nodes.p[j] = tip[i]
-                self.p_p[i_key[i]] = self.nodes.p[j]
-                Pi += [tip[i]]
-            else:
-                Pi += [self.nodes.p[j]]
-            Qi += [self.p_q[i_key[i]]]
+        #***** [0] ambient flow (linear)
+        print( '0: Ambient pressure')
+        #reset nodal pressures
+        self.nodes.p = bhp + 1.0*MPa*np.random.rand(self.nodes.num)
+        #calculate injection rate and pressures
+        try_pinj = bhp*np.ones(i_div)
+        Qi, Pi = get_HM_flow(self,try_pinj) #1st solve - low flow
+        Qi, Pi = get_HM_flow(self,try_pinj) #2nd solve - high flow
+        # Qi, Pi = get_HM_flow(self,try_pinj) #3rd solve - low flow
+        # Qi, Pi = get_HM_flow(self,try_pinj) #4th solve - high flow
+        Pis += [Pi]
+        Qis += [Qi]
+
+        #***** [1] flow at critical pressure (pseudo-linear)
+        print( '1: Critical pressure')
+        #reset nodal pressures
+        self.nodes.p = bhp + 1.0*MPa*np.random.rand(self.nodes.num)
+        #calculate injection rate and pressures
+        try_pinj = np.min(np.asarray([self.rock.s3*np.ones(i_div) - self.rock.dPi, # + 0.95*self.rock.hfmcc,
+                                      self.rock.pfinal_max*np.ones(i_div)]),axis=0)
+        Qi, Pi = get_HM_flow(self,try_pinj) #1st solve - low flow
+        Qi, Pi = get_HM_flow(self,try_pinj) #2nd solve - high flow
+        # Qi, Pi = get_HM_flow(self,try_pinj) #3rd solve - low flow
+        # Qi, Pi = get_HM_flow(self,try_pinj) #4th solve - high flow
         Pis += [Pi]
         Qis += [Qi]
         
-        #final visualization
-        Qis = np.asarray(Qis)
+        #***** [2] flow at over-critical pressure (highly non-linear)
+        print( '2: Overcritical pressure')
+        #reset nodal pressures
+        self.nodes.p = bhp + 1.0*MPa*np.random.rand(self.nodes.num)
+        #calculate injection rate and pressures
+        try_pinj = np.min(np.asarray([self.rock.s3*np.ones(i_div) + self.rock.hfmcc + 2*39.0*self.rock.dPi,
+                                      self.rock.pfinal_max*np.ones(i_div)]),axis=0)
+        Qi, Pi = get_HM_flow(self,try_pinj) #1st solve - low flow
+        Qi, Pi = get_HM_flow(self,try_pinj) #2nd solve - high flow
+        # Qi, Pi = get_HM_flow(self,try_pinj) #3rd solve - low flow
+        # Qi, Pi = get_HM_flow(self,try_pinj) #4th solve - high flow
+        Pis += [Pi]
+        Qis += [Qi]
+
+        #convert to array
         Pis = np.asarray(Pis)
+        Qis = np.asarray(Qis)
+        
+        # #error checking
+        # print('-> final flow iterations with hydromechanical coupling')
+        # print(' \tP\t\tQ')
+        # print('low\t%.2e\t%.2e' %(Pis[0][0],Qis[0][0]))
+        # print('mid\t%.2e\t%.2e' %(Pis[1][0],Qis[1][0]))
+        # print('hi \t%.2e\t%.2e' %(Pis[2][0],Qis[2][0]))
+        
+        #***** [4,5,6,7,8,9] search for best solution using binary search
+        for p in range(0,4):
+            #get next test pressures per interval
+            a = np.zeros(i_div,dtype=int) + (Qis[1] > Qinj)
+            Pis[0] = Pis[0]*(a) + Pis[1]*(1-a)
+            Pis[2] = Pis[1]*(a) + Pis[2]*(1-a)
+            Qis[0] = Qis[0]*(a) + Qis[1]*(1-a)
+            Qis[2] = Qis[1]*(a) + Qis[2]*(1-a)
+            Pis[1] = 0.5*(Pis[0] + Pis[2])
+            #reset nodal pressures
+            self.nodes.p = bhp + 1.0*MPa*np.random.rand(self.nodes.num)
+            #solve for flow
+            try_pinj = Pis[1]
+            Qi, Pi = get_HM_flow(self,try_pinj) #1st solve - low flow
+            Qi, Pi = get_HM_flow(self,try_pinj) #2nd solve - high flow
+            # Qi, Pi = get_HM_flow(self,try_pinj) #3rd solve - low flow
+            # Qi, Pi = get_HM_flow(self,try_pinj) #4th solve - high flow
+            Pis[1] = Pi
+            Qis[1] = Qi
+            # #error checking
+            # print('-> final flow iterations with hydromechanical coupling')
+            # print(' \tP\t\tQ')
+            # print('low\t%.2e\t%.2e' %(Pis[0][0],Qis[0][0]))
+            # print('mid\t%.2e\t%.2e' %(Pis[1][0],Qis[1][0]))
+            # print('hi \t%.2e\t%.2e' %(Pis[2][0],Qis[2][0]))
+        
+        #***** [10] flow boundary if flow is excessive, but don't calculate changes in apertures this step
+        #reset nodal pressures
+        self.nodes.p = bhp + 1.0*MPa*np.random.rand(self.nodes.num)
+        #solve for flow
+        try_pinj = Pis[2]
+        Qi, Pi = get_HM_flow(self,try_pinj) #1st solve - low flow
+        Qi, Pi = get_HM_flow(self,try_pinj) #2nd solve - high flow
+        # Qi, Pi = get_HM_flow(self,try_pinj) #3rd solve - low flow
+        # Qi, Pi = get_HM_flow(self,try_pinj) #4th solve - high flow
+        #correct for excess flow
+        q_well = np.full(len(self.wells),None)
+        p_well = np.full(len(self.wells),None)
+        #set injection boundary conditions using flow values
+        for i in range(0,i_div):
+            if (Qi[i] > 0.95*Qinj):
+                q_well[i_key[i]] = Qinj
+            else:
+                p_well[i_key[i]] = Pis[2][i]
+        #set production boundary conditions
+        for i in range(0,p_div):
+            p_well[p_key[i]] = pwp
+        #solve flow
+        self.get_flow(p_bound=bhp,p_well=p_well,q_well=q_well,reinit=False,Qnom=Qinj)
+        Qi = self.p_q[i_key]
+        # print('-> flow solution completed')
+        # print('P\t\tQ')
+        # print('%.2e\t%.2e' %(Pi[0],Qi[0]))
+        #override injection pressures
+        for i in range(0,i_div):
+            source = self.wells[i_key[i]].c0
+            ck, j = self.nodes.add(source)
+            self.nodes.p[j] = Pis[2][i] 
+        
+        #final visualization
         if visuals:
             #create vtk with final flow data
             fname2 = fname + '_B2'
@@ -4253,7 +4311,7 @@ class mesh:
         C = 0.0
         C += self.drill_m*drill_len
         C += self.pad_fixed
-        C += np.max([0.0,self.plant_kWe*NPsum*dt/life])
+        C += np.max([0.0,self.plant_kWe*TPsum*dt/life])
         C += self.explore_m*depth
         #quake cost
         Q = self.quake_coef * np.exp(Max_Quake*self.quake_exp)
